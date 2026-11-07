@@ -7,6 +7,7 @@ import streamlit as st
 # --- CONFIGURATION ---
 DB_NAME = "political_scale_labels.db"
 CSV_FILE = "data_cleaned.csv"
+KEY_FILE = os.path.join("secrets", "app_key.txt")
 
 SCALE_OPTIONS = [
     "extremely liberal",
@@ -21,14 +22,12 @@ SCALE_OPTIONS = [
 
 # --- PASSPHRASE AUTHENTICATION ---
 def get_stored_app_key():
-    # 1. Check native Streamlit secrets (for deployed cloud app)
+    """Reads native Streamlit secrets or local fallback secrets/app_key.txt."""
     if "APP_KEY" in st.secrets:
         return st.secrets["APP_KEY"]
 
-    # 2. Check local file secrets/app_key.txt (for local testing)
-    key_file = os.path.join("secrets", "app_key.txt")
-    if os.path.exists(key_file):
-        with open(key_file, "r", encoding="utf-8") as f:
+    if os.path.exists(KEY_FILE):
+        with open(KEY_FILE, "r", encoding="utf-8") as f:
             return f.read().strip()
 
     return ""
@@ -112,6 +111,15 @@ def load_existing_user_annotations(user_id):
     return {row[0]: row[1] for row in rows}
 
 
+def delete_user_annotations(user_id):
+    """Deletes all saved annotations for a student from the database."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM annotations WHERE user = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
 # --- DATA LOADING ---
 @st.cache_data
 def load_data():
@@ -138,13 +146,13 @@ def main():
     if not check_password():
         return
 
-    # 2. Main Page Config (only reached after successful login)
+    # 2. Main Page Config
     st.set_page_config(page_title="Political Scale Annotator", layout="wide")
     init_db()
 
     df = load_data()
 
-    # --- SIDEBAR: USER SELECTION & LOGOUT ---
+    # --- SIDEBAR: USER SELECTION & CLEAR BUTTON ---
     st.sidebar.title("👤 Student Login")
     available_users = sorted(df["user"].dropna().unique().tolist())
 
@@ -152,10 +160,6 @@ def main():
         "Select your User ID:",
         options=["-- Select User --"] + available_users,
     )
-
-    if st.sidebar.button("🔒 Lock / Logout"):
-        st.session_state.authenticated = False
-        st.rerun()
 
     if selected_user == "-- Select User --":
         st.info("👈 Please select your User ID in the sidebar to begin annotating.")
@@ -167,6 +171,23 @@ def main():
     if user_df.empty:
         st.warning(f"No profiles assigned to user '{selected_user}'.")
         return
+
+    # Live count of database submissions for selected user
+    saved_db_count = len(load_existing_user_annotations(selected_user))
+    st.sidebar.info(f"📊 **Submitted to Database:** {saved_db_count} / {len(user_df)} profiles")
+
+    # Clear All Responses Button
+    if st.sidebar.button("🗑️ Clear All Responses", use_container_width=True):
+        delete_user_annotations(selected_user)
+        st.session_state.annotations = {row["id"]: None for _, row in user_df.iterrows()}
+        st.session_state.current_idx = 0
+        st.sidebar.success("Cleared all responses!")
+        st.rerun()
+
+    st.sidebar.divider()
+    if st.sidebar.button("🔒 Lock / Logout", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
 
     # --- SESSION STATE INITIALIZATION ---
     if "user_id" not in st.session_state or st.session_state.user_id != selected_user:
@@ -193,7 +214,7 @@ def main():
     # --- PROFILE DISPLAY ---
     col_left, col_right = st.columns([1, 1], gap="medium")
 
-    # LEFT PANEL: Profile metadata (Username inside, Bio large & dark, summary removed)
+    # LEFT PANEL: Profile metadata (Username inside, Bio large & dark)
     with col_left:
         with st.container(height=450, key=f"left_container_{current_id}"):
             st.markdown(f"### 📱 Account: @{current_row['account']}")
