@@ -60,10 +60,10 @@ def get_gsheets_connection():
 
 
 def fetch_all_annotations():
-    """Reads live annotations from Google Sheets (bypassing cache)."""
+    """Reads live annotations with a 60-second cache to prevent quota exhaustion."""
     conn = get_gsheets_connection()
     try:
-        df_sheet = conn.read(ttl=0)
+        df_sheet = conn.read(ttl=60)  # Cached for 60s
         if df_sheet is None or df_sheet.empty:
             return pd.DataFrame(columns=["id", "account", "political_scale", "user", "timestamp"])
         df_sheet["id"] = df_sheet["id"].astype(str)
@@ -87,7 +87,6 @@ def save_user_annotations(user_id, annotations_dict, user_df):
     conn = get_gsheets_connection()
     df_sheet = fetch_all_annotations()
 
-    # Remove existing records for this user to perform an upsert
     if not df_sheet.empty:
         df_sheet = df_sheet[df_sheet["user"] != str(user_id)]
 
@@ -116,6 +115,7 @@ def save_user_annotations(user_id, annotations_dict, user_df):
         df_updated = df_sheet
 
     conn.update(data=df_updated)
+    st.cache_data.clear()  # Invalidate Streamlit cache after writing
 
 
 def delete_user_annotations(user_id):
@@ -124,9 +124,9 @@ def delete_user_annotations(user_id):
     df_sheet = fetch_all_annotations()
 
     if not df_sheet.empty:
-        # Filter out the user's rows
         df_updated = df_sheet[df_sheet["user"] != str(user_id)]
         conn.update(data=df_updated)
+        st.cache_data.clear()
 
 
 # --- DATA LOADING ---
@@ -158,7 +158,7 @@ def main():
 
     df = load_data()
 
-    # --- SIDEBAR: USER SELECTION & ACTIONS ---
+    # --- SIDEBAR: USER SELECTION ---
     st.sidebar.title("👤 Student Login")
     available_users = sorted(df["user"].dropna().unique().tolist())
 
@@ -177,30 +177,33 @@ def main():
         st.warning(f"No profiles assigned to user '{selected_user}'.")
         return
 
-    # Live count of Google Sheets submissions for selected user
-    saved_annotations = load_existing_user_annotations(selected_user)
-    st.sidebar.info(f"📊 **Submitted to Google Sheets:** {len(saved_annotations)} / {len(user_df)} profiles")
+    # --- SESSION STATE INITIALIZATION (Runs ONLY ONCE per user selection) ---
+    if "user_id" not in st.session_state or st.session_state.user_id != selected_user:
+        st.session_state.user_id = selected_user
+        st.session_state.current_idx = 0
+        
+        # Single API call on initial login/selection
+        saved_annotations = load_existing_user_annotations(selected_user)
+        st.session_state.annotations = {
+            row["id"]: saved_annotations.get(row["id"], None) for _, row in user_df.iterrows()
+        }
 
-    # Clear All Responses Button (Deletes from Google Sheets)
+    # Count submitted profiles from local session state without API calls
+    submitted_count = sum(1 for v in st.session_state.annotations.values() if v is not None)
+    st.sidebar.info(f"📊 **Annotated:** {submitted_count} / {len(user_df)} profiles")
+
+    # Clear All Responses Button
     if st.sidebar.button("🗑️ Clear All Responses", use_container_width=True):
         delete_user_annotations(selected_user)
         st.session_state.annotations = {row["id"]: None for _, row in user_df.iterrows()}
         st.session_state.current_idx = 0
-        st.sidebar.success("Cleared all responses from Google Sheets!")
+        st.sidebar.success("Cleared all responses!")
         st.rerun()
 
     st.sidebar.divider()
     if st.sidebar.button("🔒 Lock / Logout", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
-
-    # --- SESSION STATE INITIALIZATION ---
-    if "user_id" not in st.session_state or st.session_state.user_id != selected_user:
-        st.session_state.user_id = selected_user
-        st.session_state.current_idx = 0
-        st.session_state.annotations = {
-            row["id"]: saved_annotations.get(row["id"], None) for _, row in user_df.iterrows()
-        }
 
     idx = st.session_state.current_idx
     current_row = user_df.iloc[idx]
