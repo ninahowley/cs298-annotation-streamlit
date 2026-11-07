@@ -1,11 +1,11 @@
 import ast
 import os
-import sqlite3
+from datetime import datetime
 import pandas as pd
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION ---
-DB_NAME = "political_scale_labels.db"
 CSV_FILE = "data_cleaned.csv"
 KEY_FILE = os.path.join("secrets", "app_key.txt")
 
@@ -22,7 +22,6 @@ SCALE_OPTIONS = [
 
 # --- PASSPHRASE AUTHENTICATION ---
 def get_stored_app_key():
-    """Reads native Streamlit secrets or local fallback secrets/app_key.txt."""
     if "APP_KEY" in st.secrets:
         return st.secrets["APP_KEY"]
 
@@ -34,7 +33,6 @@ def get_stored_app_key():
 
 
 def check_password():
-    """Returns True if the user has entered the correct passphrase."""
     if st.session_state.get("authenticated", False):
         return True
 
@@ -56,68 +54,79 @@ def check_password():
     return False
 
 
-# --- DATABASE SETUP ---
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS annotations (
-            id TEXT PRIMARY KEY,
-            account TEXT,
-            political_scale TEXT,
-            user TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """
-    )
-    conn.commit()
-    conn.close()
+# --- GOOGLE SHEETS DATABASE OPERATIONS ---
+def get_gsheets_connection():
+    return st.connection("gsheets", type=GSheetsConnection)
+
+
+def fetch_all_annotations():
+    """Reads live annotations from Google Sheets (bypassing cache)."""
+    conn = get_gsheets_connection()
+    try:
+        df_sheet = conn.read(ttl=0)
+        if df_sheet is None or df_sheet.empty:
+            return pd.DataFrame(columns=["id", "account", "political_scale", "user", "timestamp"])
+        df_sheet["id"] = df_sheet["id"].astype(str)
+        df_sheet["user"] = df_sheet["user"].astype(str)
+        return df_sheet
+    except Exception:
+        return pd.DataFrame(columns=["id", "account", "political_scale", "user", "timestamp"])
+
+
+def load_existing_user_annotations(user_id):
+    """Loads a specific user's saved annotations from Google Sheets."""
+    df_sheet = fetch_all_annotations()
+    if df_sheet.empty:
+        return {}
+    user_rows = df_sheet[df_sheet["user"] == str(user_id)]
+    return dict(zip(user_rows["id"], user_rows["political_scale"]))
 
 
 def save_user_annotations(user_id, annotations_dict, user_df):
-    """Saves all annotations for a student into the SQLite database."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
+    """Upserts user annotations to Google Sheets."""
+    conn = get_gsheets_connection()
+    df_sheet = fetch_all_annotations()
+
+    # Remove existing records for this user to perform an upsert
+    if not df_sheet.empty:
+        df_sheet = df_sheet[df_sheet["user"] != str(user_id)]
+
+    new_rows = []
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for item_id, scale_val in annotations_dict.items():
         if scale_val:
             acct_series = user_df.loc[user_df["id"].astype(str) == str(item_id), "account"]
             acct_name = acct_series.values[0] if not acct_series.empty else ""
 
-            cursor.execute(
-                """
-                INSERT INTO annotations (id, account, political_scale, user)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    political_scale = excluded.political_scale,
-                    user = excluded.user,
-                    timestamp = CURRENT_TIMESTAMP
-            """,
-                (str(item_id), str(acct_name), str(scale_val), str(user_id)),
+            new_rows.append(
+                {
+                    "id": str(item_id),
+                    "account": str(acct_name),
+                    "political_scale": str(scale_val),
+                    "user": str(user_id),
+                    "timestamp": timestamp,
+                }
             )
 
-    conn.commit()
-    conn.close()
+    if new_rows:
+        df_new = pd.DataFrame(new_rows)
+        df_updated = pd.concat([df_sheet, df_new], ignore_index=True)
+    else:
+        df_updated = df_sheet
 
-
-def load_existing_user_annotations(user_id):
-    """Loads previously submitted labels for a student from DB to restore progress."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, political_scale FROM annotations WHERE user = ?", (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return {row[0]: row[1] for row in rows}
+    conn.update(data=df_updated)
 
 
 def delete_user_annotations(user_id):
-    """Deletes all saved annotations for a student from the database."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM annotations WHERE user = ?", (user_id,))
-    conn.commit()
-    conn.close()
+    """Deletes all saved annotations for a specific student from Google Sheets."""
+    conn = get_gsheets_connection()
+    df_sheet = fetch_all_annotations()
+
+    if not df_sheet.empty:
+        # Filter out the user's rows
+        df_updated = df_sheet[df_sheet["user"] != str(user_id)]
+        conn.update(data=df_updated)
 
 
 # --- DATA LOADING ---
@@ -142,17 +151,14 @@ def load_data():
 
 # --- MAIN APP UI ---
 def main():
-    # 1. Gatekeeper: Require passphrase before loading main app
     if not check_password():
         return
 
-    # 2. Main Page Config
     st.set_page_config(page_title="Political Scale Annotator", layout="wide")
-    init_db()
 
     df = load_data()
 
-    # --- SIDEBAR: USER SELECTION & CLEAR BUTTON ---
+    # --- SIDEBAR: USER SELECTION & ACTIONS ---
     st.sidebar.title("👤 Student Login")
     available_users = sorted(df["user"].dropna().unique().tolist())
 
@@ -165,23 +171,22 @@ def main():
         st.info("👈 Please select your User ID in the sidebar to begin annotating.")
         return
 
-    # Filter dataset for assigned user
     user_df = df[df["user"] == selected_user].reset_index(drop=True)
 
     if user_df.empty:
         st.warning(f"No profiles assigned to user '{selected_user}'.")
         return
 
-    # Live count of database submissions for selected user
-    saved_db_count = len(load_existing_user_annotations(selected_user))
-    st.sidebar.info(f"📊 **Submitted to Database:** {saved_db_count} / {len(user_df)} profiles")
+    # Live count of Google Sheets submissions for selected user
+    saved_annotations = load_existing_user_annotations(selected_user)
+    st.sidebar.info(f"📊 **Submitted to Google Sheets:** {len(saved_annotations)} / {len(user_df)} profiles")
 
-    # Clear All Responses Button
+    # Clear All Responses Button (Deletes from Google Sheets)
     if st.sidebar.button("🗑️ Clear All Responses", use_container_width=True):
         delete_user_annotations(selected_user)
         st.session_state.annotations = {row["id"]: None for _, row in user_df.iterrows()}
         st.session_state.current_idx = 0
-        st.sidebar.success("Cleared all responses!")
+        st.sidebar.success("Cleared all responses from Google Sheets!")
         st.rerun()
 
     st.sidebar.divider()
@@ -193,9 +198,8 @@ def main():
     if "user_id" not in st.session_state or st.session_state.user_id != selected_user:
         st.session_state.user_id = selected_user
         st.session_state.current_idx = 0
-        db_annotations = load_existing_user_annotations(selected_user)
         st.session_state.annotations = {
-            row["id"]: db_annotations.get(row["id"], None) for _, row in user_df.iterrows()
+            row["id"]: saved_annotations.get(row["id"], None) for _, row in user_df.iterrows()
         }
 
     idx = st.session_state.current_idx
@@ -214,7 +218,7 @@ def main():
     # --- PROFILE DISPLAY ---
     col_left, col_right = st.columns([1, 1], gap="medium")
 
-    # LEFT PANEL: Profile metadata (Username inside, Bio large & dark)
+    # LEFT PANEL: Profile metadata
     with col_left:
         with st.container(height=450, key=f"left_container_{current_id}"):
             st.markdown(f"### 📱 Account: @{current_row['account']}")
@@ -247,7 +251,7 @@ def main():
                 unsafe_allow_html=True,
             )
 
-    # RIGHT PANEL: Video Captions (dynamic key forces scroll reset on profile change)
+    # RIGHT PANEL: Video Captions
     with col_right:
         st.subheader("🎥 Video Posts Captions")
         with st.container(height=450, key=f"video_container_{current_id}"):
@@ -269,7 +273,7 @@ def main():
     st.subheader("⚖️ Annotate Political Scale")
 
     existing_choice = st.session_state.annotations.get(current_id)
-    default_index = SCALE_OPTIONS.index(existing_choice) if existing_choice in SCALE_OPTIONS else 3  # Default to 'moderate'
+    default_index = SCALE_OPTIONS.index(existing_choice) if existing_choice in SCALE_OPTIONS else 3
 
     selected_scale = st.radio(
         "Select the political scale for this profile:",
@@ -296,9 +300,9 @@ def main():
                 st.rerun()
 
     with nav_col2:
-        if st.button("💾 Submit All Annotations to Database", type="primary", use_container_width=True):
+        if st.button("💾 Submit All Annotations to Google Sheets", type="primary", use_container_width=True):
             save_user_annotations(selected_user, st.session_state.annotations, user_df)
-            st.success(f"✅ All annotations for user '{selected_user}' have been successfully saved to {DB_NAME}!")
+            st.success(f"✅ All annotations for user '{selected_user}' have been saved directly to Google Sheets!")
 
 
 if __name__ == "__main__":
