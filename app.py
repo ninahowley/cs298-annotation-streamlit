@@ -60,10 +60,10 @@ def get_gsheets_connection():
 
 
 def fetch_all_annotations():
-    """Reads live annotations with a 60-second cache to prevent quota exhaustion."""
+    """Reads live annotations from Google Sheets with 60s cache."""
     conn = get_gsheets_connection()
     try:
-        df_sheet = conn.read(ttl=60)  # Cached for 60s
+        df_sheet = conn.read(ttl=60)
         if df_sheet is None or df_sheet.empty:
             return pd.DataFrame(columns=["id", "account", "political_scale", "user", "timestamp"])
         df_sheet["id"] = df_sheet["id"].astype(str)
@@ -115,7 +115,7 @@ def save_user_annotations(user_id, annotations_dict, user_df):
         df_updated = df_sheet
 
     conn.update(data=df_updated)
-    st.cache_data.clear()  # Invalidate Streamlit cache after writing
+    st.cache_data.clear()
 
 
 def delete_user_annotations(user_id):
@@ -177,27 +177,29 @@ def main():
         st.warning(f"No profiles assigned to user '{selected_user}'.")
         return
 
-    # --- SESSION STATE INITIALIZATION (Runs ONLY ONCE per user selection) ---
+    # --- SESSION STATE INITIALIZATION (Runs ONCE per user login) ---
     if "user_id" not in st.session_state or st.session_state.user_id != selected_user:
         st.session_state.user_id = selected_user
         st.session_state.current_idx = 0
-        
-        # Single API call on initial login/selection
+
         saved_annotations = load_existing_user_annotations(selected_user)
         st.session_state.annotations = {
             row["id"]: saved_annotations.get(row["id"], None) for _, row in user_df.iterrows()
         }
+        # Track submitted count strictly from Google Sheets state
+        st.session_state.db_submitted_count = len(saved_annotations)
 
-    # Count submitted profiles from local session state without API calls
-    submitted_count = sum(1 for v in st.session_state.annotations.values() if v is not None)
-    st.sidebar.info(f"📊 **Annotated:** {submitted_count} / {len(user_df)} profiles")
+    # Sidebar counter reads strictly from submitted state (does not change on radio clicks)
+    submitted_count = st.session_state.get("db_submitted_count", 0)
+    st.sidebar.info(f"📊 **Submitted to Database:** {submitted_count} / {len(user_df)} profiles")
 
     # Clear All Responses Button
     if st.sidebar.button("🗑️ Clear All Responses", use_container_width=True):
         delete_user_annotations(selected_user)
         st.session_state.annotations = {row["id"]: None for _, row in user_df.iterrows()}
+        st.session_state.db_submitted_count = 0
         st.session_state.current_idx = 0
-        st.sidebar.success("Cleared all responses!")
+        st.sidebar.success("Cleared all responses from Google Sheets!")
         st.rerun()
 
     st.sidebar.divider()
@@ -286,6 +288,7 @@ def main():
         key=f"radio_{current_id}",
     )
 
+    # Store locally in session state (does NOT trigger Google Sheets API or update sidebar count)
     st.session_state.annotations[current_id] = selected_scale
 
     # --- NAVIGATION & SUBMIT BUTTONS ---
@@ -305,7 +308,13 @@ def main():
     with nav_col2:
         if st.button("💾 Submit All Annotations to Google Sheets", type="primary", use_container_width=True):
             save_user_annotations(selected_user, st.session_state.annotations, user_df)
+
+            # Update submitted count in session state only on explicit submit
+            new_count = sum(1 for v in st.session_state.annotations.values() if v is not None)
+            st.session_state.db_submitted_count = new_count
+
             st.success(f"✅ All annotations for user '{selected_user}' have been saved directly to Google Sheets!")
+            st.rerun()
 
 
 if __name__ == "__main__":
