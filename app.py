@@ -225,8 +225,9 @@ def main():
 
     # LEFT PANEL: Profile metadata
     with col_left:
+        st.subheader(f"Account: @{current_row['account']}")
+        st.markdown(f"### Account: [:blue[@{current_row['account']}]]({current_row['profile_url']})")
         with st.container(height=450, key=f"left_container_{current_id}"):
-            st.subheader(f"Account: @{current_row['account']}")
             st.page_link(current_row["profile_url"], label="Account link")
 
             m1, m2, m3 = st.columns(3)
