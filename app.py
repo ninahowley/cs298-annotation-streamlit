@@ -226,7 +226,8 @@ def main():
     # LEFT PANEL: Profile metadata
     with col_left:
         with st.container(height=450, key=f"left_container_{current_id}"):
-            st.markdown(f"### 📱 Account: @{current_row['account']}")
+            st.subheader(f"Account: @{current_row['account']}")
+            st.page_link(current_row["profile_link"], label="Account link")
 
             m1, m2, m3 = st.columns(3)
             m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row['followers']) else "N/A")
@@ -242,12 +243,9 @@ def main():
                 <div style="
                     font-size: 1.25rem; 
                     color: #111111; 
-                    font-weight: 600; 
                     line-height: 1.5; 
                     background-color: #f8f9fa; 
                     padding: 14px; 
-                    border-left: 5px solid #ff4b4b; 
-                    border-radius: 6px; 
                     margin-top: 4px;
                 ">
                     {bio_text}
@@ -258,9 +256,11 @@ def main():
 
     # RIGHT PANEL: Video Captions
     with col_right:
-        st.subheader("🎥 Video Posts Captions")
+        st.subheader("Video Posts Captions")
         with st.container(height=450, key=f"video_container_{current_id}"):
             posts_list = current_row["parsed_posts"]
+            if posts_list:
+                posts_list = sorted(posts_list, key=lambda x: str(x.get("datetime", "")), reverse=True)
             if posts_list:
                 for i, post in enumerate(posts_list, 1):
                     caption = post.get("caption", "No caption provided.")
