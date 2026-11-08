@@ -227,7 +227,7 @@ def main():
     with col_left:
         with st.container(height=450, key=f"left_container_{current_id}"):
             st.subheader(f"Account: @{current_row['account']}")
-            st.page_link(current_row["profile_link"], label="Account link")
+            st.page_link(current_row["profile_url"], label="Account link")
 
             m1, m2, m3 = st.columns(3)
             m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row['followers']) else "N/A")
