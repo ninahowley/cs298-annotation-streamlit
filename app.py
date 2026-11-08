@@ -49,7 +49,7 @@ def check_password():
             st.session_state.authenticated = True
             st.rerun()
         else:
-            st.error("❌ Incorrect passphrase. Please try again.")
+            st.error("Incorrect passphrase. Please try again.")
 
     return False
 
@@ -159,7 +159,7 @@ def main():
     df = load_data()
 
     # --- SIDEBAR: USER SELECTION ---
-    st.sidebar.title("👤 Student Login")
+    st.sidebar.title("Student Login")
     available_users = sorted(df["user"].dropna().unique().tolist())
 
     selected_user = st.sidebar.selectbox(
@@ -168,7 +168,7 @@ def main():
     )
 
     if selected_user == "-- Select User --":
-        st.info("👈 Please select your User ID in the sidebar to begin annotating.")
+        st.info("Please select your User ID in the sidebar to begin annotating.")
         return
 
     user_df = df[df["user"] == selected_user].reset_index(drop=True)
@@ -191,10 +191,10 @@ def main():
 
     # Sidebar counter reads strictly from submitted state (does not change on radio clicks)
     submitted_count = st.session_state.get("db_submitted_count", 0)
-    st.sidebar.info(f"📊 **Submitted to Database:** {submitted_count} / {len(user_df)} profiles")
+    st.sidebar.info(f"**Submitted:** {submitted_count} / {len(user_df)} profiles")
 
     # Clear All Responses Button
-    if st.sidebar.button("🗑️ Clear All Responses", use_container_width=True):
+    if st.sidebar.button("Clear All Responses", use_container_width=True):
         delete_user_annotations(selected_user)
         st.session_state.annotations = {row["id"]: None for _, row in user_df.iterrows()}
         st.session_state.db_submitted_count = 0
@@ -203,7 +203,7 @@ def main():
         st.rerun()
 
     st.sidebar.divider()
-    if st.sidebar.button("🔒 Lock / Logout", use_container_width=True):
+    if st.sidebar.button("🔒 Exit App", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
 
@@ -212,7 +212,7 @@ def main():
     current_id = current_row["id"]
 
     # --- TOP PROGRESS BAR & HEADER ---
-    st.title("🏷️ Political Scale Profile Annotator")
+    st.title("Political Scale Profile Annotator")
 
     progress = (idx + 1) / len(user_df)
     st.progress(progress)
@@ -227,11 +227,9 @@ def main():
     with col_left:
         st.markdown(f"### Account: [:blue[@{current_row['account']}]]({current_row['profile_url']})")
         with st.container(height=450, key=f"left_container_{current_id}"):
-            st.page_link(current_row["profile_url"], label="Account link")
-
             m1, m2, m3 = st.columns(3)
             m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row['followers']) else "N/A")
-            m2.metric("Verified", "✅ Yes" if current_row.get("is_verified") else "❌ No")
+            m2.metric("Verified", "Yes" if current_row.get("is_verified") else "No")
             m3.metric("Category", str(current_row.get("account_category", "N/A")))
 
             st.markdown(f"**Full Name:** {current_row['full_name']}")
@@ -268,14 +266,14 @@ def main():
                     dt = post.get("datetime", "")[:10]
 
                     st.markdown(f"**Video #{i}** *({content_type} • {dt})*")
-                    st.write(f"💬 {caption}")
+                    st.write(f"{caption}")
                     st.divider()
             else:
                 st.write("No video posts found for this profile.")
 
     # --- ANNOTATION SELECTION AREA ---
     st.markdown("---")
-    st.subheader("⚖️ Annotate Political Scale")
+    st.subheader("Annotate Political Scale")
 
     existing_choice = st.session_state.annotations.get(current_id)
     default_index = SCALE_OPTIONS.index(existing_choice) if existing_choice in SCALE_OPTIONS else 3
@@ -295,25 +293,25 @@ def main():
     nav_col1, nav_col2, nav_col3 = st.columns([2, 4, 2])
 
     with nav_col1:
-        if st.button("⬅️ Previous", disabled=(idx == 0), use_container_width=True):
+        if st.button("Previous", disabled=(idx == 0), use_container_width=True):
             st.session_state.current_idx -= 1
             st.rerun()
 
     with nav_col3:
         if idx < len(user_df) - 1:
-            if st.button("Next ➡️", use_container_width=True):
+            if st.button("Next", use_container_width=True):
                 st.session_state.current_idx += 1
                 st.rerun()
 
     with nav_col2:
-        if st.button("💾 Submit All Annotations to Google Sheets", type="primary", use_container_width=True):
+        if st.button("Submit All Annotations", type="primary", use_container_width=True):
             save_user_annotations(selected_user, st.session_state.annotations, user_df)
 
             # Update submitted count in session state only on explicit submit
             new_count = sum(1 for v in st.session_state.annotations.values() if v is not None)
             st.session_state.db_submitted_count = new_count
 
-            st.success(f"✅ All annotations for user '{selected_user}' have been saved directly to Google Sheets!")
+            st.success(f"All annotations for user '{selected_user}' have been saved directly to Google Sheets!")
             st.rerun()
 
 
