@@ -144,7 +144,8 @@ def save_user_annotations(user_id, annotations_dict, user_df):
             acct_name = sub_df["account"].values[0] if not sub_df.empty and "account" in sub_df.columns else ""
             qwen_typ = sub_df[typ_col].values[0] if not sub_df.empty and typ_col else ""
             qwen_cert = sub_df[cert_col].values[0] if not sub_df.empty and cert_col else ""
-
+            if str(typology_val) == "not applicable (the profile is not political)":
+                typology_val = "not applicable"
             new_rows.append(
                 {
                     "id": str(item_id),
