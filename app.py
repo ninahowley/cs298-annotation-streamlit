@@ -10,14 +10,15 @@ CSV_FILE = "data/annotation_dataset.csv"
 KEY_FILE = os.path.join("secrets", "app_key.txt")
 
 TYPOLOGY_OPTIONS = [
-    "loyal liberal",
     "leftward progressive",
-    "no apologies right",
-    "pragmatic and polite right",
-    "tuned-out middle",
+    "loyal liberal",
     "left-out left",
-    "faith first conservative",
+    "order and opportunity left",
+    "tuned-out middle",
+    "pragmatic and polite right",
     "unconventional right",
+    "faith first conservative",
+    "no apologies right"
 ]
 
 TYPOLOGY_DEFINITIONS = {
@@ -192,10 +193,10 @@ def main():
 
     # --- SIDEBAR: TYPOLOGY DEFINITIONS DROPDOWN ---
     st.sidebar.divider()
-    with st.sidebar.expander("📖 Typology Definitions"):
+    with st.sidebar.expander("Typology Definitions"):
         for title, desc in TYPOLOGY_DEFINITIONS.items():
             st.markdown(f"**{title.title()}**")
-            st.write(desc)
+            st.caption(desc)
             st.divider()
 
     # --- SESSION STATE INITIALIZATION ---
