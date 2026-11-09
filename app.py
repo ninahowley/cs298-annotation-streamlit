@@ -6,7 +6,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION ---
-CSV_FILE = "typology_dataset.csv"
+CSV_FILE = "data/typology_dataset.csv"
 KEY_FILE = os.path.join("secrets", "app_key.txt")
 
 TYPOLOGY_OPTIONS = [
