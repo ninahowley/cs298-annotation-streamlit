@@ -150,10 +150,10 @@ def save_user_annotations(user_id, annotations_dict, user_df):
                 {
                     "id": str(item_id),
                     "account": str(acct_name),
-                    "typology": str(typology_val),
-                    "qwen_typology": str(qwen_typ),
-                    "qwen_certainty": str(qwen_cert),
                     "user": str(user_id),
+                    "user_label": str(typology_val),
+                    "qwen_label": str(qwen_typ),
+                    "qwen_certainty": str(qwen_cert),
                     "timestamp": timestamp,
                 }
             )
