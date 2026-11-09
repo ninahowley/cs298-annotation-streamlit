@@ -18,7 +18,8 @@ TYPOLOGY_OPTIONS = [
     "pragmatic and polite right",
     "unconventional right",
     "faith first conservative",
-    "no apologies right"
+    "no apologies right",
+    "not applicable (the profile is not political)"
 ]
 
 TYPOLOGY_DEFINITIONS = {
@@ -31,6 +32,7 @@ TYPOLOGY_DEFINITIONS = {
     "unconventional right": "Conservative on immigration and culture, but they break from those to their right on some other key issues. Support strict immigration enforcement. More open than groups to their right to working with allies. Younger and less religious than other Republican-oriented groups. Moderately politically engaged.",
     "faith first conservative": "Staunch conservatives and strong Trump supporters who stand out for their faith-oriented politics. Devout and overwhelmingly Christian. Oppose abortion and see same-sex marriage as bad for society. Prefer a smaller government and limited social safety net.",
     "no apologies right": "Unwavering Trump supporters with a pugilistic political style and an ‘America first’ outlook. Strong backers of the administration’s efforts to deport immigrants in the U.S. illegally. See traditional U.S. allies as burdensome. Strongly oppose diversity, equity and inclusion (DEI) programs. Distrustful of experts and many traditional media organizations.",
+    "not applicable": "The profile is not political."
 }
 
 
