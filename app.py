@@ -81,12 +81,32 @@ def fetch_all_annotations():
     try:
         df_sheet = conn.read(ttl=60)
         if df_sheet is None or df_sheet.empty:
-            return pd.DataFrame(columns=["id", "account", "typology", "user", "timestamp"])
+            return pd.DataFrame(
+                columns=[
+                    "id",
+                    "account",
+                    "typology",
+                    "qwen_typology",
+                    "qwen_certainty",
+                    "user",
+                    "timestamp",
+                ]
+            )
         df_sheet["id"] = df_sheet["id"].astype(str)
         df_sheet["user"] = df_sheet["user"].astype(str)
         return df_sheet
     except Exception:
-        return pd.DataFrame(columns=["id", "account", "typology", "user", "timestamp"])
+        return pd.DataFrame(
+            columns=[
+                "id",
+                "account",
+                "typology",
+                "qwen_typology",
+                "qwen_certainty",
+                "user",
+                "timestamp",
+            ]
+        )
 
 
 def load_existing_user_annotations(user_id):
@@ -99,7 +119,7 @@ def load_existing_user_annotations(user_id):
 
 
 def save_user_annotations(user_id, annotations_dict, user_df):
-    """Upserts user typology annotations to Google Sheets."""
+    """Upserts user typology annotations along with Qwen model baseline data to Google Sheets."""
     conn = get_gsheets_connection()
     df_sheet = fetch_all_annotations()
 
@@ -109,20 +129,42 @@ def save_user_annotations(user_id, annotations_dict, user_df):
     new_rows = []
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Safely identify the column names for Qwen typology and certainty in user_df
+    typ_col = "qwen_typology" if "qwen_typology" in user_df.columns else ("typology" if "typology" in user_df.columns else None)
+    cert_col = (
+        "qwen_certainty"
+        if "qwen_certainty" in user_df.columns
+        else ("certainty" if "certainty" in user_df.columns else ("typology_certainty" if "typology_certainty" in user_df.columns else None))
+    )
+
     for item_id, typology_val in annotations_dict.items():
         if typology_val:
-            acct_series = user_df.loc[user_df["id"].astype(str) == str(item_id), "account"]
-            acct_name = acct_series.values[0] if not acct_series.empty else ""
+            sub_df = user_df[user_df["id"].astype(str) == str(item_id)]
+
+            acct_name = sub_df["account"].values[0] if not sub_df.empty and "account" in sub_df.columns else ""
+            qwen_typ = sub_df[typ_col].values[0] if not sub_df.empty and typ_col else ""
+            qwen_cert = sub_df[cert_col].values[0] if not sub_df.empty and cert_col else ""
 
             new_rows.append(
                 {
                     "id": str(item_id),
                     "account": str(acct_name),
                     "typology": str(typology_val),
+                    "qwen_typology": str(qwen_typ),
+                    "qwen_certainty": str(qwen_cert),
                     "user": str(user_id),
                     "timestamp": timestamp,
                 }
             )
+
+    if new_rows:
+        df_new = pd.DataFrame(new_rows)
+        df_updated = pd.concat([df_sheet, df_new], ignore_index=True)
+    else:
+        df_updated = df_sheet
+
+    conn.update(data=df_updated)
+    st.cache_data.clear()
 
     if new_rows:
         df_new = pd.DataFrame(new_rows)
