@@ -251,7 +251,7 @@ def main():
             m1, m2, m3 = st.columns(3)
             m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row['followers']) else "N/A")
             m2.metric("Verified", "Yes" if current_row.get("is_verified") else "No")
-            m3.metric("Category", str(current_row.get("category", current_row.get("account_category", "N/A"))))
+            m3.metric("Category (labelled by AI)", str(current_row.get("category", current_row.get("account_category", "N/A"))))
 
             st.markdown(f"**Full Name:** {current_row['full_name']}")
             st.markdown("**Biography:**")
