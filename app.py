@@ -85,10 +85,10 @@ def fetch_all_annotations():
                 columns=[
                     "id",
                     "account",
-                    "typology",
-                    "qwen_typology",
-                    "qwen_certainty",
                     "user",
+                    "user_label",
+                    "qwen_label",
+                    "qwen_certainty",
                     "timestamp",
                 ]
             )
@@ -100,10 +100,10 @@ def fetch_all_annotations():
             columns=[
                 "id",
                 "account",
-                "typology",
-                "qwen_typology",
-                "qwen_certainty",
                 "user",
+                "user_label",
+                "qwen_label",
+                "qwen_certainty",
                 "timestamp",
             ]
         )
@@ -130,7 +130,7 @@ def save_user_annotations(user_id, annotations_dict, user_df):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Safely identify the column names for Qwen typology and certainty in user_df
-    typ_col = "qwen_typology" if "qwen_typology" in user_df.columns else ("typology" if "typology" in user_df.columns else None)
+    typ_col = "qwen_label"
     cert_col = (
         "qwen_certainty"
         if "qwen_certainty" in user_df.columns
