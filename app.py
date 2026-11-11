@@ -85,10 +85,10 @@ def fetch_all_annotations():
                 columns=[
                     "id",
                     "account",
-                    "typology",
-                    "qwen_typology",
-                    "qwen_certainty",
                     "user",
+                    "user_label",
+                    "qwen_label",
+                    "qwen_certainty",
                     "timestamp",
                 ]
             )
@@ -100,22 +100,21 @@ def fetch_all_annotations():
             columns=[
                 "id",
                 "account",
-                "typology",
-                "qwen_typology",
-                "qwen_certainty",
                 "user",
+                "user_label",
+                "qwen_label",
+                "qwen_certainty",
                 "timestamp",
             ]
         )
 
-
 def load_existing_user_annotations(user_id):
     """Loads a specific user's saved annotations from Google Sheets."""
     df_sheet = fetch_all_annotations()
-    if df_sheet.empty or "typology" not in df_sheet.columns:
+    if df_sheet.empty or "user_label" not in df_sheet.columns:
         return {}
     user_rows = df_sheet[df_sheet["user"] == str(user_id)]
-    return dict(zip(user_rows["id"], user_rows["typology"]))
+    return dict(zip(user_rows["id"], user_rows["user_label"]))
 
 
 def save_user_annotations(user_id, annotations_dict, user_df):
@@ -129,8 +128,8 @@ def save_user_annotations(user_id, annotations_dict, user_df):
     new_rows = []
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Safely identify the column names for Qwen typology and certainty in user_df
-    typ_col = "qwen_typology" if "qwen_typology" in user_df.columns else ("typology" if "typology" in user_df.columns else None)
+    # Identify Qwen typology and certainty source columns from user_df
+    typ_col = "qwen_typology" if "qwen_typology" in user_df.columns else ("qwen_label" if "qwen_label" in user_df.columns else ("typology" if "typology" in user_df.columns else None))
     cert_col = (
         "qwen_certainty"
         if "qwen_certainty" in user_df.columns
@@ -144,28 +143,18 @@ def save_user_annotations(user_id, annotations_dict, user_df):
             acct_name = sub_df["account"].values[0] if not sub_df.empty and "account" in sub_df.columns else ""
             qwen_typ = sub_df[typ_col].values[0] if not sub_df.empty and typ_col else ""
             qwen_cert = sub_df[cert_col].values[0] if not sub_df.empty and cert_col else ""
-            if str(typology_val) == "not applicable (the profile is not political)":
-                typology_val = "not applicable"
+
             new_rows.append(
                 {
                     "id": str(item_id),
                     "account": str(acct_name),
-                    "typology": str(typology_val),
-                    "qwen_typology": str(qwen_typ),
-                    "qwen_certainty": str(qwen_cert),
                     "user": str(user_id),
+                    "user_label": str(typology_val),
+                    "qwen_label": str(qwen_typ),
+                    "qwen_certainty": str(qwen_cert),
                     "timestamp": timestamp,
                 }
             )
-
-    if new_rows:
-        df_new = pd.DataFrame(new_rows)
-        df_updated = pd.concat([df_sheet, df_new], ignore_index=True)
-    else:
-        df_updated = df_sheet
-
-    conn.update(data=df_updated)
-    st.cache_data.clear()
 
     if new_rows:
         df_new = pd.DataFrame(new_rows)
