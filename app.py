@@ -317,7 +317,10 @@ def main():
                 for i, post in enumerate(posts_list, 1):
                     caption = post.get("caption", "No caption provided.")
                     content_type = post.get("content_type", "Video")
-                    dt = post.get("datetime", "")[:10]
+                    
+                    # Safely extract and slice date regardless of missing/null data types
+                    raw_dt = post.get("datetime")
+                    dt = str(raw_dt)[:10] if pd.notna(raw_dt) and raw_dt else ""
 
                     st.markdown(f"**Video #{i}** *({content_type} • {dt})*")
                     st.write(f"{caption}")
