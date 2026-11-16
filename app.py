@@ -6,20 +6,19 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION ---
-CSV_FILE = "data/annotation_dataset.csv"
+CSV_FILE = "typology_dataset.csv"
+RESULTS_SNAPSHOT_FILE = "current_annotations.csv"
 KEY_FILE = os.path.join("secrets", "app_key.txt")
 
 TYPOLOGY_OPTIONS = [
-    "leftward progressive",
     "loyal liberal",
-    "left-out left",
-    "order and opportunity left",
-    "tuned-out middle",
-    "pragmatic and polite right",
-    "unconventional right",
-    "faith first conservative",
+    "leftward progressive",
     "no apologies right",
-    "not applicable (the profile is not political)"
+    "pragmatic and polite right",
+    "tuned-out middle",
+    "left-out left",
+    "faith first conservative",
+    "unconventional right",
 ]
 
 TYPOLOGY_DEFINITIONS = {
@@ -32,8 +31,17 @@ TYPOLOGY_DEFINITIONS = {
     "unconventional right": "Conservative on immigration and culture, but they break from those to their right on some other key issues. Support strict immigration enforcement. More open than groups to their right to working with allies. Younger and less religious than other Republican-oriented groups. Moderately politically engaged.",
     "faith first conservative": "Staunch conservatives and strong Trump supporters who stand out for their faith-oriented politics. Devout and overwhelmingly Christian. Oppose abortion and see same-sex marriage as bad for society. Prefer a smaller government and limited social safety net.",
     "no apologies right": "Unwavering Trump supporters with a pugilistic political style and an ‘America first’ outlook. Strong backers of the administration’s efforts to deport immigrants in the U.S. illegally. See traditional U.S. allies as burdensome. Strongly oppose diversity, equity and inclusion (DEI) programs. Distrustful of experts and many traditional media organizations.",
-    "not applicable": "The profile is not political."
 }
+
+SHEET_COLUMNS = [
+    "id",
+    "account",
+    "user",
+    "user_label",
+    "qwen_label",
+    "qwen_certainty",
+    "timestamp",
+]
 
 
 # --- PASSPHRASE AUTHENTICATION ---
@@ -48,28 +56,6 @@ def get_stored_app_key():
     return ""
 
 
-def check_password():
-    if st.session_state.get("authenticated", False):
-        return True
-
-    st.set_page_config(page_title="Access Gate", layout="centered")
-
-    st.title("🔒 Restricted Access")
-    st.write("Please enter the passphrase to access the Political Typology Annotator.")
-
-    correct_key = get_stored_app_key()
-    user_input = st.text_input("Passphrase:", type="password", key="passphrase_input")
-
-    if st.button("Enter Website", type="primary", use_container_width=True):
-        if user_input == correct_key:
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Incorrect passphrase. Please try again.")
-
-    return False
-
-
 # --- GOOGLE SHEETS DATABASE OPERATIONS ---
 def get_gsheets_connection():
     return st.connection("gsheets", type=GSheetsConnection)
@@ -81,32 +67,13 @@ def fetch_all_annotations():
     try:
         df_sheet = conn.read(ttl=60)
         if df_sheet is None or df_sheet.empty:
-            return pd.DataFrame(
-                columns=[
-                    "id",
-                    "account",
-                    "user",
-                    "user_label",
-                    "qwen_label",
-                    "qwen_certainty",
-                    "timestamp",
-                ]
-            )
+            return pd.DataFrame(columns=SHEET_COLUMNS)
         df_sheet["id"] = df_sheet["id"].astype(str)
         df_sheet["user"] = df_sheet["user"].astype(str)
         return df_sheet
     except Exception:
-        return pd.DataFrame(
-            columns=[
-                "id",
-                "account",
-                "user",
-                "user_label",
-                "qwen_label",
-                "qwen_certainty",
-                "timestamp",
-            ]
-        )
+        return pd.DataFrame(columns=SHEET_COLUMNS)
+
 
 def load_existing_user_annotations(user_id):
     """Loads a specific user's saved annotations from Google Sheets."""
@@ -128,8 +95,11 @@ def save_user_annotations(user_id, annotations_dict, user_df):
     new_rows = []
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Identify Qwen typology and certainty source columns from user_df
-    typ_col = "qwen_typology" if "qwen_typology" in user_df.columns else ("qwen_label" if "qwen_label" in user_df.columns else ("typology" if "typology" in user_df.columns else None))
+    typ_col = (
+        "qwen_typology"
+        if "qwen_typology" in user_df.columns
+        else ("qwen_label" if "qwen_label" in user_df.columns else ("typology" if "typology" in user_df.columns else None))
+    )
     cert_col = (
         "qwen_certainty"
         if "qwen_certainty" in user_df.columns
@@ -197,13 +167,185 @@ def load_data():
     return df
 
 
-# --- MAIN APP UI ---
-def main():
-    if not check_password():
+# --- PAGE 1: LAUNCH / ACCESS GATE ---
+def render_launch_page():
+    _, center_col, _ = st.columns([1, 1.5, 1])
+
+    with center_col:
+        st.title("🔒 Restricted Access")
+        st.write("Please enter the passphrase to access the Political Typology Annotator.")
+
+        correct_key = get_stored_app_key()
+        user_input = st.text_input("Passphrase:", type="password", key="passphrase_input")
+
+        if st.button("Enter Website", type="primary", use_container_width=True):
+            if user_input == correct_key:
+                st.session_state.authenticated = True
+                st.session_state.page = "annotate"
+                st.rerun()
+            else:
+                st.error("Incorrect passphrase. Please try again.")
+
+        if st.button("Explore Results", use_container_width=True):
+            # Clear cached results snapshot so opening Explore Results loads fresh state
+            st.session_state.pop("results_df", None)
+            st.session_state.page = "explore_results"
+            st.rerun()
+
+
+# --- PAGE 2: EXPLORE RESULTS (ONLY ACCESSIBLE FROM LAUNCH PAGE) ---
+def render_explore_results_page():
+    top_col1, top_col2, top_col3 = st.columns([5, 1.5, 1.5])
+    with top_col1:
+        st.title("📊 Annotation Results Explorer")
+    with top_col2:
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.session_state.pop("results_df", None)
+            st.rerun()
+    with top_col3:
+        if st.button("⬅️ Back to Launch Page", use_container_width=True):
+            st.session_state.page = "launch"
+            st.rerun()
+
+    # Save current state of the results CSV into session_state DataFrame & local CSV snapshot
+    if "results_df" not in st.session_state:
+        df_live = fetch_all_annotations()
+        if not df_live.empty:
+            for col in ["id", "account", "user", "user_label", "qwen_label", "qwen_certainty"]:
+                if col in df_live.columns:
+                    df_live[col] = df_live[col].fillna("").astype(str).str.strip()
+        st.session_state.results_df = df_live
+        st.session_state.results_saved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        df_live.to_csv(RESULTS_SNAPSHOT_FILE, index=False)
+
+    df_results = st.session_state.results_df
+    df_assignments = load_data()
+
+    # --- DISPLAY CURRENT CSV STATE DATAFRAME ON SCREEN ---
+    st.subheader("Current Annotations Dataset (`df`)")
+    st.caption(
+        f"Snapshot captured at **{st.session_state.get('results_saved_at', '')}** | "
+        f"**{len(df_results)}** rows × **{len(df_results.columns)}** columns"
+    )
+    st.dataframe(df_results, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        label="⬇️ Download Current CSV",
+        data=df_results.to_csv(index=False).encode("utf-8"),
+        file_name=f"typology_annotations_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+    )
+
+    st.divider()
+
+    # --- SUMMARY METRICS ---
+    total_expected = len(df_assignments)
+    total_submitted = len(df_results)
+    unique_profiles_done = df_results["id"].nunique() if not df_results.empty else 0
+    total_unique_profiles = df_assignments["id"].nunique()
+
+    if not df_results.empty and {"user_label", "qwen_label"}.issubset(df_results.columns):
+        valid_comp = df_results[(df_results["user_label"] != "") & (df_results["qwen_label"] != "")]
+        model_agreement = (
+            (valid_comp["user_label"].str.lower() == valid_comp["qwen_label"].str.lower()).mean() * 100
+            if not valid_comp.empty
+            else 0.0
+        )
+    else:
+        model_agreement = 0.0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Annotations Submitted", f"{total_submitted} / {total_expected}")
+    m2.metric("Unique Profiles Annotated", f"{unique_profiles_done} / {total_unique_profiles}")
+    m3.metric(
+        "Active Students",
+        f"{df_results['user'].nunique() if not df_results.empty else 0} / {df_assignments['user'].nunique()}",
+    )
+    m4.metric("Student vs. Qwen Agreement", f"{model_agreement:.1f}%")
+
+    st.divider()
+
+    # --- STUDENT COMPLETION PROGRESS ---
+    st.subheader("Student Completion Progress")
+    assigned_counts = df_assignments.groupby("user")["id"].count().reset_index(name="Assigned")
+    if not df_results.empty:
+        submitted_counts = df_results.groupby("user")["id"].nunique().reset_index(name="Submitted")
+        progress_df = pd.merge(assigned_counts, submitted_counts, on="user", how="left").fillna(0)
+    else:
+        progress_df = assigned_counts.copy()
+        progress_df["Submitted"] = 0
+
+    progress_df["Submitted"] = progress_df["Submitted"].astype(int)
+    progress_df["Completion (%)"] = ((progress_df["Submitted"] / progress_df["Assigned"]) * 100).round(1)
+    progress_df = progress_df.sort_values(by=["Submitted", "user"], ascending=[False, True])
+
+    p_col1, p_col2 = st.columns([1.2, 1.8])
+    with p_col1:
+        st.dataframe(progress_df, use_container_width=True, hide_index=True)
+    with p_col2:
+        st.bar_chart(progress_df.set_index("user")[["Submitted", "Assigned"]])
+
+    if df_results.empty:
+        st.info("No annotations have been submitted to Google Sheets yet.")
         return
 
-    st.set_page_config(page_title="Political Typology Annotator", layout="wide")
+    st.divider()
 
+    # --- LABEL DISTRIBUTIONS & MODEL COMPARISON ---
+    st.subheader("Label Distribution: Students vs. Qwen")
+    d_col1, d_col2 = st.columns(2)
+
+    with d_col1:
+        st.markdown("**Student Labels (`user_label`)**")
+        user_dist = df_results["user_label"].value_counts().reset_index()
+        user_dist.columns = ["Typology", "Count"]
+        st.bar_chart(user_dist.set_index("Typology"))
+
+    with d_col2:
+        st.markdown("**Qwen Baseline Labels (`qwen_label`)**")
+        qwen_dist = df_results["qwen_label"].value_counts().reset_index()
+        qwen_dist.columns = ["Typology", "Count"]
+        st.bar_chart(qwen_dist.set_index("Typology"))
+
+    st.divider()
+
+    # --- INTER-ANNOTATOR AGREEMENT ---
+    st.subheader("Inter-Student Agreement (Multi-Annotated Profiles)")
+    grouped_profiles = (
+        df_results.groupby(["id", "account", "qwen_label", "qwen_certainty"])
+        .agg(
+            annotator_count=("user", "count"),
+            students=("user", lambda x: ", ".join(x)),
+            student_labels=("user_label", lambda x: ", ".join(x)),
+            unique_labels=("user_label", lambda x: x.str.lower().nunique()),
+        )
+        .reset_index()
+    )
+
+    multi_annotated = grouped_profiles[grouped_profiles["annotator_count"] >= 2].copy()
+    if not multi_annotated.empty:
+        multi_annotated["Students Agree?"] = multi_annotated["unique_labels"].apply(
+            lambda n: "✅ Exact Match" if n == 1 else "⚠️ Disagreement"
+        )
+        exact_match_rate = (multi_annotated["unique_labels"] == 1).mean() * 100
+        st.caption(
+            f"**{len(multi_annotated)}** profiles have 2+ student annotations | "
+            f"Exact inter-student agreement: **{exact_match_rate:.1f}%**"
+        )
+        st.dataframe(
+            multi_annotated[
+                ["id", "account", "students", "student_labels", "qwen_label", "qwen_certainty", "Students Agree?"]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No profiles have been annotated by 2 or more students yet.")
+
+
+# --- PAGE 3: STUDENT ANNOTATOR WORKSPACE ---
+def render_annotator_page():
     df = load_data()
 
     # --- SIDEBAR: USER SELECTION & DEFINITIONS ---
@@ -217,6 +359,11 @@ def main():
 
     if selected_user == "-- Select User --":
         st.info("Please select your User ID in the sidebar to begin annotating.")
+        st.sidebar.divider()
+        if st.sidebar.button("🔒 Exit App", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.page = "launch"
+            st.rerun()
         return
 
     user_df = df[df["user"] == selected_user].reset_index(drop=True)
@@ -227,10 +374,10 @@ def main():
 
     # --- SIDEBAR: TYPOLOGY DEFINITIONS DROPDOWN ---
     st.sidebar.divider()
-    with st.sidebar.expander("Typology Definitions"):
+    with st.sidebar.expander("📖 Typology Definitions"):
         for title, desc in TYPOLOGY_DEFINITIONS.items():
             st.markdown(f"**{title.title()}**")
-            st.caption(desc)
+            st.write(desc)
             st.divider()
 
     # --- SESSION STATE INITIALIZATION ---
@@ -260,6 +407,7 @@ def main():
     st.sidebar.divider()
     if st.sidebar.button("🔒 Exit App", use_container_width=True):
         st.session_state.authenticated = False
+        st.session_state.page = "launch"
         st.rerun()
 
     idx = st.session_state.current_idx
@@ -283,14 +431,14 @@ def main():
         st.markdown(f"### Account: [:blue[@{current_row['account']}]]({current_row.get('url', '#')})")
         with st.container(height=450, key=f"left_container_{current_id}"):
             m1, m2, m3 = st.columns(3)
-            m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row['followers']) else "N/A")
+            m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row["followers"]) else "N/A")
             m2.metric("Verified", "Yes" if current_row.get("is_verified") else "No")
-            m3.metric("Category (labelled by AI)", str(current_row.get("category", current_row.get("account_category", "N/A"))))
+            m3.metric("Category", str(current_row.get("category", current_row.get("account_category", "N/A"))))
 
             st.markdown(f"**Full Name:** {current_row['full_name']}")
             st.markdown("**Biography:**")
 
-            bio_text = current_row['biography'] if pd.notna(current_row['biography']) else "No biography available."
+            bio_text = current_row["biography"] if pd.notna(current_row["biography"]) else "No biography available."
             st.markdown(
                 f"""
                 <div style="
@@ -317,8 +465,6 @@ def main():
                 for i, post in enumerate(posts_list, 1):
                     caption = post.get("caption", "No caption provided.")
                     content_type = post.get("content_type", "Video")
-                    
-                    # Safely extract and slice date regardless of missing/null data types
                     raw_dt = post.get("datetime")
                     dt = str(raw_dt)[:10] if pd.notna(raw_dt) and raw_dt else ""
 
@@ -368,6 +514,22 @@ def main():
 
             st.success(f"All annotations for user '{selected_user}' have been saved directly to Google Sheets!")
             st.rerun()
+
+
+# --- MAIN ROUTER ---
+def main():
+    st.set_page_config(page_title="Political Typology Annotator", layout="wide")
+
+    if "page" not in st.session_state:
+        st.session_state.page = "launch"
+
+    if st.session_state.page == "explore_results":
+        render_explore_results_page()
+    elif st.session_state.page == "annotate" and st.session_state.get("authenticated", False):
+        render_annotator_page()
+    else:
+        st.session_state.page = "launch"
+        render_launch_page()
 
 
 if __name__ == "__main__":
