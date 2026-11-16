@@ -541,13 +541,13 @@ def render_explore_results_page():
                         margin-top: 4px;
                     ">
                         {bio_text}
-                    </div>
+                    </div><br>
                     """,
                     unsafe_allow_html=True,
                 )
 
                 # Show account_summary or info if present in data/typology_dataset.csv
-                for extra_col, extra_label in [("account_summary", "Account Summary"), ("info", "Additional Info")]:
+                for extra_col, extra_label in [("account_summary", "Qwen Account Summary"), ("info", "Additional Info")]:
                     if extra_col in prof_row and pd.notna(prof_row[extra_col]) and str(prof_row[extra_col]).strip():
                         st.markdown(f"**{extra_label}:**")
                         st.write(str(prof_row[extra_col]))
