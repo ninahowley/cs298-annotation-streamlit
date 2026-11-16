@@ -585,7 +585,7 @@ def render_explore_results_page():
                     st.markdown(render_label_badge(q_label), unsafe_allow_html=True)
                 with q_col2:
                     st.markdown("**Qwen Certainty:**")
-                    st.markdown(f"""<p style="font-size:1rem;">{q_cert}</p>""", unsafe_allow_html=True)
+                    st.markdown(f"""<p style="font-size:2rem;">{q_cert}</p>""", unsafe_allow_html=True)
 
                 st.write("")
 
