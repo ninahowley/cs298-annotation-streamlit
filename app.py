@@ -7,6 +7,7 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION ---
 CSV_FILE = "typology_dataset.csv"
+LABELLED_CSV_FILE = os.path.join("data", "instagram_labelled_typology.csv")
 RESULTS_SNAPSHOT_FILE = "current_annotations.csv"
 KEY_FILE = os.path.join("secrets", "app_key.txt")
 
@@ -19,7 +20,21 @@ TYPOLOGY_OPTIONS = [
     "left-out left",
     "faith first conservative",
     "unconventional right",
+    "not applicable",
 ]
+
+TYPOLOGY_COLORS = {
+    "leftward progressive": "#174d79",
+    "loyal liberal": "#12689b",
+    "left-out left": "#5a7dbe",
+    "order and opportunity left": "#61a9bf",
+    "tuned-out middle": "#cebf48",
+    "pragmatic and polite right": "#ce703f",
+    "unconventional right": "#f18878",
+    "faith first conservative": "#c13c29",
+    "no apologies right": "#912e20",
+    "not applicable": "#747474",
+}
 
 TYPOLOGY_DEFINITIONS = {
     "leftward progressive": "Liberal across the board, they are among the strongest critics of the U.S. economic system and the Trump administration. Support expanding the social safety net. Economically populist. Want more political parties in the U.S. Young, very online and largely religiously unaffiliated.",
@@ -42,6 +57,42 @@ SHEET_COLUMNS = [
     "qwen_certainty",
     "timestamp",
 ]
+
+
+# --- HELPER FUNCTIONS ---
+def normalize_label(val):
+    """Standardizes typology strings and maps long 'not applicable' label to 'not applicable'."""
+    if pd.isna(val) or val is None:
+        return ""
+    s = str(val).strip()
+    if s.lower() == "not applicable (the profile is not political)":
+        return "not applicable"
+    return s
+
+
+def render_label_badge(label_text):
+    """Returns an HTML pill badge styled with the typology's assigned hex color."""
+    clean_label = normalize_label(label_text)
+    if not clean_label:
+        return "<span style='color:#666;'>N/A</span>"
+
+    key = clean_label.lower()
+    bg_color = TYPOLOGY_COLORS.get(key, "#747474")
+    # Use dark text on lighter yellow/coral swatches for high contrast
+    text_color = "#111111" if key in {"tuned-out middle"} else "#ffffff"
+
+    return (
+        f"<span style='"
+        f"background-color: {bg_color}; "
+        f"color: {text_color}; "
+        f"padding: 4px 12px; "
+        f"border-radius: 14px; "
+        f"font-weight: 600; "
+        f"font-size: 0.9rem; "
+        f"display: inline-block; "
+        f"letter-spacing: 0.2px;"
+        f"'>{clean_label}</span>"
+    )
 
 
 # --- PASSPHRASE AUTHENTICATION ---
@@ -81,7 +132,7 @@ def load_existing_user_annotations(user_id):
     if df_sheet.empty or "user_label" not in df_sheet.columns:
         return {}
     user_rows = df_sheet[df_sheet["user"] == str(user_id)]
-    return dict(zip(user_rows["id"], user_rows["user_label"]))
+    return dict(zip(user_rows["id"], user_rows["user_label"].apply(normalize_label)))
 
 
 def save_user_annotations(user_id, annotations_dict, user_df):
@@ -119,8 +170,8 @@ def save_user_annotations(user_id, annotations_dict, user_df):
                     "id": str(item_id),
                     "account": str(acct_name),
                     "user": str(user_id),
-                    "user_label": str(typology_val),
-                    "qwen_label": str(qwen_typ),
+                    "user_label": normalize_label(typology_val),
+                    "qwen_label": normalize_label(qwen_typ),
                     "qwen_certainty": str(qwen_cert),
                     "timestamp": timestamp,
                 }
@@ -167,6 +218,62 @@ def load_data():
     return df
 
 
+@st.cache_data
+def load_labelled_typology_data():
+    """Loads /data/instagram_labelled_typology.csv and enriches missing profile metadata from typology_dataset.csv."""
+    if os.path.exists(LABELLED_CSV_FILE):
+        df_lab = pd.read_csv(LABELLED_CSV_FILE, encoding="utf-8")
+    elif os.path.exists("instagram_labelled_typology.csv"):
+        df_lab = pd.read_csv("instagram_labelled_typology.csv", encoding="utf-8")
+    else:
+        return pd.DataFrame()
+
+    if "id" in df_lab.columns:
+        df_lab["id"] = df_lab["id"].astype(str)
+    if "account" in df_lab.columns:
+        df_lab["account"] = df_lab["account"].astype(str).str.strip()
+
+    # Standardize Qwen label column
+    q_label_col = next(
+        (c for c in ["qwen_label", "qwen_typology", "typology"] if c in df_lab.columns),
+        None,
+    )
+    df_lab["qwen_label_clean"] = df_lab[q_label_col].apply(normalize_label) if q_label_col else ""
+
+    # Standardize Qwen justification column
+    q_just_col = next(
+        (c for c in ["qwen_justification", "typology_justification", "justification"] if c in df_lab.columns),
+        None,
+    )
+    df_lab["qwen_justification_clean"] = (
+        df_lab[q_just_col].fillna("No justification provided.").astype(str)
+        if q_just_col
+        else "No justification provided."
+    )
+
+    # Standardize Qwen certainty column
+    q_cert_col = next(
+        (c for c in ["qwen_certainty", "typology_certainty", "certainty"] if c in df_lab.columns),
+        None,
+    )
+    df_lab["qwen_certainty_clean"] = (
+        df_lab[q_cert_col].fillna("N/A").astype(str) if q_cert_col else "N/A"
+    )
+
+    # Fill in any missing profile metadata columns from typology_dataset.csv
+    if os.path.exists(CSV_FILE):
+        df_base = pd.read_csv(CSV_FILE, encoding="utf-8")
+        df_base["id"] = df_base["id"].astype(str)
+        df_base_unique = df_base.drop_duplicates(subset=["id"])
+
+        meta_cols = ["full_name", "biography", "is_verified", "followers", "url", "category"]
+        missing_cols = [c for c in meta_cols if c not in df_lab.columns and c in df_base_unique.columns]
+        if missing_cols and "id" in df_lab.columns:
+            df_lab = df_lab.merge(df_base_unique[["id"] + missing_cols], on="id", how="left")
+
+    return df_lab
+
+
 # --- PAGE 1: LAUNCH / ACCESS GATE ---
 def render_launch_page():
     _, center_col, _ = st.columns([1, 1.5, 1])
@@ -187,7 +294,6 @@ def render_launch_page():
                 st.error("Incorrect passphrase. Please try again.")
 
         if st.button("Explore Results", use_container_width=True):
-            # Clear cached results snapshot so opening Explore Results loads fresh state
             st.session_state.pop("results_df", None)
             st.session_state.page = "explore_results"
             st.rerun()
@@ -208,140 +314,231 @@ def render_explore_results_page():
             st.session_state.page = "launch"
             st.rerun()
 
-    # Save current state of the results CSV into session_state DataFrame & local CSV snapshot
+    # Save current state of the results CSV into session_state DataFrame & local snapshot
     if "results_df" not in st.session_state:
         df_live = fetch_all_annotations()
         if not df_live.empty:
             for col in ["id", "account", "user", "user_label", "qwen_label", "qwen_certainty"]:
                 if col in df_live.columns:
                     df_live[col] = df_live[col].fillna("").astype(str).str.strip()
+            if "user_label" in df_live.columns:
+                df_live["user_label"] = df_live["user_label"].apply(normalize_label)
+            if "qwen_label" in df_live.columns:
+                df_live["qwen_label"] = df_live["qwen_label"].apply(normalize_label)
+
         st.session_state.results_df = df_live
         st.session_state.results_saved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         df_live.to_csv(RESULTS_SNAPSHOT_FILE, index=False)
 
     df_results = st.session_state.results_df
-    df_assignments = load_data()
 
-    # --- DISPLAY CURRENT CSV STATE DATAFRAME ON SCREEN ---
-    st.subheader("Current Annotations Dataset (`df`)")
+    # --- 1. PRINTED DATAFRAME AT TOP ---
     st.caption(
         f"Snapshot captured at **{st.session_state.get('results_saved_at', '')}** | "
         f"**{len(df_results)}** rows × **{len(df_results.columns)}** columns"
     )
     st.dataframe(df_results, use_container_width=True, hide_index=True)
 
-    st.download_button(
-        label="⬇️ Download Current CSV",
-        data=df_results.to_csv(index=False).encode("utf-8"),
-        file_name=f"typology_annotations_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv",
-    )
-
     st.divider()
 
-    # --- SUMMARY METRICS ---
-    total_expected = len(df_assignments)
-    total_submitted = len(df_results)
-    unique_profiles_done = df_results["id"].nunique() if not df_results.empty else 0
-    total_unique_profiles = df_assignments["id"].nunique()
+    # --- 2. DROPDOWN: JUSTIFICATIONS ---
+    with st.expander("Justifications", expanded=True):
+        df_lab = load_labelled_typology_data()
 
-    if not df_results.empty and {"user_label", "qwen_label"}.issubset(df_results.columns):
-        valid_comp = df_results[(df_results["user_label"] != "") & (df_results["qwen_label"] != "")]
-        model_agreement = (
-            (valid_comp["user_label"].str.lower() == valid_comp["qwen_label"].str.lower()).mean() * 100
-            if not valid_comp.empty
-            else 0.0
+        if df_lab.empty:
+            st.warning(f"Could not find `{LABELLED_CSV_FILE}`. Please ensure the file exists in `/data/`.")
+            return
+
+        # Build ideology options ordered by TYPOLOGY_COLORS
+        available_ideologies_lower = set(df_lab["qwen_label_clean"].str.lower().unique())
+        ordered_ideologies = [
+            ideo for ideo in TYPOLOGY_COLORS.keys() if ideo in available_ideologies_lower
+        ]
+        # Append any extra ideology labels if present
+        for raw_ideo in sorted(df_lab["qwen_label_clean"].unique()):
+            if raw_ideo and raw_ideo.lower() not in TYPOLOGY_COLORS:
+                ordered_ideologies.append(raw_ideo)
+
+        if not ordered_ideologies:
+            st.info("No `qwen_label` ideologies found in the dataset.")
+            return
+
+        # Color-coded ideology legend strip
+        legend_html = " ".join(
+            [
+                f"<span style='background-color:{TYPOLOGY_COLORS.get(ideo.lower(), '#747474')}; "
+                f"color:{'#111111' if ideo.lower() == 'tuned-out middle' else '#ffffff'}; "
+                f"padding:2px 8px; border-radius:10px; font-size:0.78rem; font-weight:600; "
+                f"display:inline-block; margin:2px;'>{ideo}</span>"
+                for ideo in ordered_ideologies
+            ]
         )
-    else:
-        model_agreement = 0.0
+        st.markdown(legend_html, unsafe_allow_html=True)
+        st.write("")
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Annotations Submitted", f"{total_submitted} / {total_expected}")
-    m2.metric("Unique Profiles Annotated", f"{unique_profiles_done} / {total_unique_profiles}")
-    m3.metric(
-        "Active Students",
-        f"{df_results['user'].nunique() if not df_results.empty else 0} / {df_assignments['user'].nunique()}",
-    )
-    m4.metric("Student vs. Qwen Agreement", f"{model_agreement:.1f}%")
+        filter_col1, filter_col2 = st.columns([1, 1], gap="medium")
 
-    st.divider()
+        with filter_col1:
+            ideo_counts = df_lab["qwen_label_clean"].str.lower().value_counts().to_dict()
+            selected_ideology = st.selectbox(
+                "Select Qwen Ideology (`qwen_label`):",
+                options=ordered_ideologies,
+                format_func=lambda x: f"{x} ({ideo_counts.get(x.lower(), 0)} profiles)",
+                key="justifications_ideology_filter",
+            )
+            st.markdown(
+                f"Selected Ideology: {render_label_badge(selected_ideology)}",
+                unsafe_allow_html=True,
+            )
 
-    # --- STUDENT COMPLETION PROGRESS ---
-    st.subheader("Student Completion Progress")
-    assigned_counts = df_assignments.groupby("user")["id"].count().reset_index(name="Assigned")
-    if not df_results.empty:
-        submitted_counts = df_results.groupby("user")["id"].nunique().reset_index(name="Submitted")
-        progress_df = pd.merge(assigned_counts, submitted_counts, on="user", how="left").fillna(0)
-    else:
-        progress_df = assigned_counts.copy()
-        progress_df["Submitted"] = 0
+        # Filter profiles matching the selected Qwen ideology
+        filtered_profiles = df_lab[
+            df_lab["qwen_label_clean"].str.lower() == selected_ideology.lower()
+        ].copy()
 
-    progress_df["Submitted"] = progress_df["Submitted"].astype(int)
-    progress_df["Completion (%)"] = ((progress_df["Submitted"] / progress_df["Assigned"]) * 100).round(1)
-    progress_df = progress_df.sort_values(by=["Submitted", "user"], ascending=[False, True])
+        # Count how many student labels exist per profile in df_results
+        if not df_results.empty:
+            id_counts = df_results.groupby("id")["user"].count().to_dict() if "id" in df_results.columns else {}
+            acct_counts = (
+                df_results.groupby(df_results["account"].str.lower())["user"].count().to_dict()
+                if "account" in df_results.columns
+                else {}
+            )
 
-    p_col1, p_col2 = st.columns([1.2, 1.8])
-    with p_col1:
-        st.dataframe(progress_df, use_container_width=True, hide_index=True)
-    with p_col2:
-        st.bar_chart(progress_df.set_index("user")[["Submitted", "Assigned"]])
+            def get_student_label_count(row):
+                r_id = str(row.get("id", ""))
+                r_acct = str(row.get("account", "")).lower()
+                return id_counts.get(r_id, acct_counts.get(r_acct, 0))
 
-    if df_results.empty:
-        st.info("No annotations have been submitted to Google Sheets yet.")
-        return
+            filtered_profiles["student_ann_count"] = filtered_profiles.apply(get_student_label_count, axis=1)
+        else:
+            filtered_profiles["student_ann_count"] = 0
 
-    st.divider()
+        # Prioritize profiles that have student annotations, then sort alphabetically by account
+        filtered_profiles = filtered_profiles.sort_values(
+            by=["student_ann_count", "account"], ascending=[False, True]
+        ).reset_index(drop=True)
 
-    # --- LABEL DISTRIBUTIONS & MODEL COMPARISON ---
-    st.subheader("Label Distribution: Students vs. Qwen")
-    d_col1, d_col2 = st.columns(2)
+        with filter_col2:
+            profile_indices = list(range(len(filtered_profiles)))
+            selected_prof_idx = st.selectbox(
+                "Select Profile Account:",
+                options=profile_indices,
+                format_func=lambda idx_val: (
+                    f"@{filtered_profiles.iloc[idx_val]['account']} "
+                    f"({filtered_profiles.iloc[idx_val]['student_ann_count']} student label"
+                    f"{'' if filtered_profiles.iloc[idx_val]['student_ann_count'] == 1 else 's'})"
+                ),
+                key=f"justifications_profile_filter_{selected_ideology}",
+            )
 
-    with d_col1:
-        st.markdown("**Student Labels (`user_label`)**")
-        user_dist = df_results["user_label"].value_counts().reset_index()
-        user_dist.columns = ["Typology", "Count"]
-        st.bar_chart(user_dist.set_index("Typology"))
+        st.markdown("---")
 
-    with d_col2:
-        st.markdown("**Qwen Baseline Labels (`qwen_label`)**")
-        qwen_dist = df_results["qwen_label"].value_counts().reset_index()
-        qwen_dist.columns = ["Typology", "Count"]
-        st.bar_chart(qwen_dist.set_index("Typology"))
+        prof_row = filtered_profiles.iloc[selected_prof_idx]
+        prof_id = str(prof_row.get("id", ""))
+        prof_account = str(prof_row.get("account", ""))
 
-    st.divider()
+        # --- TWO-COLUMN PROFILE & LABELS VIEW ---
+        col_left, col_right = st.columns([1, 1], gap="medium")
 
-    # --- INTER-ANNOTATOR AGREEMENT ---
-    st.subheader("Inter-Student Agreement (Multi-Annotated Profiles)")
-    grouped_profiles = (
-        df_results.groupby(["id", "account", "qwen_label", "qwen_certainty"])
-        .agg(
-            annotator_count=("user", "count"),
-            students=("user", lambda x: ", ".join(x)),
-            student_labels=("user_label", lambda x: ", ".join(x)),
-            unique_labels=("user_label", lambda x: x.str.lower().nunique()),
-        )
-        .reset_index()
-    )
+        # LEFT PANEL: Exact profile info layout from annotation page
+        with col_left:
+            st.markdown(f"### Account: [:blue[@{prof_account}]]({prof_row.get('url', '#')})")
+            with st.container(height=450, key=f"just_left_{prof_id}_{prof_account}"):
+                m1, m2, m3 = st.columns(3)
+                followers_val = prof_row.get("followers")
+                m1.metric("Followers", f"{int(followers_val):,}" if pd.notna(followers_val) else "N/A")
+                m2.metric("Verified", "Yes" if prof_row.get("is_verified") else "No")
+                m3.metric("Category", str(prof_row.get("category", prof_row.get("account_category", "N/A"))))
 
-    multi_annotated = grouped_profiles[grouped_profiles["annotator_count"] >= 2].copy()
-    if not multi_annotated.empty:
-        multi_annotated["Students Agree?"] = multi_annotated["unique_labels"].apply(
-            lambda n: "✅ Exact Match" if n == 1 else "⚠️ Disagreement"
-        )
-        exact_match_rate = (multi_annotated["unique_labels"] == 1).mean() * 100
-        st.caption(
-            f"**{len(multi_annotated)}** profiles have 2+ student annotations | "
-            f"Exact inter-student agreement: **{exact_match_rate:.1f}%**"
-        )
-        st.dataframe(
-            multi_annotated[
-                ["id", "account", "students", "student_labels", "qwen_label", "qwen_certainty", "Students Agree?"]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("No profiles have been annotated by 2 or more students yet.")
+                st.markdown(f"**Full Name:** {prof_row.get('full_name', 'N/A')}")
+                st.markdown("**Biography:**")
+
+                bio_text = (
+                    prof_row["biography"]
+                    if "biography" in prof_row and pd.notna(prof_row["biography"])
+                    else "No biography available."
+                )
+                st.markdown(
+                    f"""
+                    <div style="
+                        font-size: 1.25rem; 
+                        color: #111111; 
+                        line-height: 1.5; 
+                        background-color: #f8f9fa; 
+                        padding: 14px; 
+                        margin-top: 4px;
+                    ">
+                        {bio_text}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        # RIGHT PANEL: Student labels + Qwen label, certainty & justification
+        with col_right:
+            st.subheader("Annotations & Qwen Justification")
+            with st.container(height=450, key=f"just_right_{prof_id}_{prof_account}"):
+                # 1. Student Labels
+                st.markdown("**Student Labels:**")
+                matched_students = pd.DataFrame()
+                if not df_results.empty:
+                    if prof_id and "id" in df_results.columns:
+                        matched_students = df_results[df_results["id"] == prof_id]
+                    if matched_students.empty and prof_account and "account" in df_results.columns:
+                        matched_students = df_results[
+                            df_results["account"].str.lower() == prof_account.lower()
+                        ]
+
+                if not matched_students.empty:
+                    for _, s_row in matched_students.iterrows():
+                        s_user = s_row.get("user", "Unknown")
+                        s_label = s_row.get("user_label", "")
+                        badge_html = render_label_badge(s_label)
+                        st.markdown(
+                            f"<div style='margin-bottom:8px;'>👤 <strong>{s_user}</strong>: {badge_html}</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption("No student annotations submitted for this profile yet.")
+
+                st.divider()
+
+                # 2. Qwen Label & Certainty
+                q_label = prof_row.get("qwen_label_clean", "")
+                q_cert = prof_row.get("qwen_certainty_clean", "N/A")
+                q_just = prof_row.get("qwen_justification_clean", "No justification provided.")
+
+                q_col1, q_col2 = st.columns([1.4, 1])
+                with q_col1:
+                    st.markdown("**Qwen Label:**")
+                    st.markdown(render_label_badge(q_label), unsafe_allow_html=True)
+                with q_col2:
+                    st.markdown("**Qwen Certainty:**")
+                    st.markdown(f"**`{q_cert}`**")
+
+                st.write("")
+
+                # 3. Qwen Justification
+                st.markdown("**Qwen Justification:**")
+                border_hex = TYPOLOGY_COLORS.get(q_label.lower(), "#747474")
+                st.markdown(
+                    f"""
+                    <div style="
+                        font-size: 1.02rem;
+                        color: #111111;
+                        line-height: 1.55;
+                        background-color: #f8f9fa;
+                        padding: 14px;
+                        border-left: 5px solid {border_hex};
+                        border-radius: 6px;
+                        margin-top: 4px;
+                    ">
+                        {q_just}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 # --- PAGE 3: STUDENT ANNOTATOR WORKSPACE ---
