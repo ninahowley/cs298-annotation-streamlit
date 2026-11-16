@@ -412,7 +412,7 @@ def render_explore_results_page():
     st.divider()
 
     # --- 2. DROPDOWN: JUSTIFICATIONS ---
-    with st.expander("Justifications", expanded=True):
+    with st.expander("Qwen Labels & Justifications", expanded=True):
         annotation_usernames = (
             tuple(sorted(df_results["account"].dropna().unique().tolist()))
             if not df_results.empty and "account" in df_results.columns
@@ -585,7 +585,7 @@ def render_explore_results_page():
                     st.markdown(render_label_badge(q_label), unsafe_allow_html=True)
                 with q_col2:
                     st.markdown("**Qwen Certainty:**")
-                    st.markdown(f"**`{q_cert}`**")
+                    st.metric(q_cert)
 
                 st.write("")
 
