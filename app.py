@@ -70,6 +70,13 @@ def normalize_label(val):
     return s
 
 
+def normalize_account(val):
+    """Normalizes Instagram account handles for reliable cross-file matching."""
+    if pd.isna(val) or val is None:
+        return ""
+    return str(val).strip().lstrip("@").lower()
+
+
 def render_label_badge(label_text):
     """Returns an HTML pill badge styled with the typology's assigned hex color."""
     clean_label = normalize_label(label_text)
@@ -78,7 +85,6 @@ def render_label_badge(label_text):
 
     key = clean_label.lower()
     bg_color = TYPOLOGY_COLORS.get(key, "#747474")
-    # Use dark text on lighter yellow/coral swatches for high contrast
     text_color = "#111111" if key in {"tuned-out middle"} else "#ffffff"
 
     return (
@@ -219,8 +225,8 @@ def load_data():
 
 
 @st.cache_data
-def load_labelled_typology_data():
-    """Loads /data/instagram_labelled_typology.csv and enriches missing profile metadata from typology_dataset.csv."""
+def load_labelled_typology_data(annotation_accounts):
+    """Loads /data/instagram_labelled_typology.csv and keeps only rows whose account matches the annotation CSV."""
     if os.path.exists(LABELLED_CSV_FILE):
         df_lab = pd.read_csv(LABELLED_CSV_FILE, encoding="utf-8")
     elif os.path.exists("instagram_labelled_typology.csv"):
@@ -228,10 +234,21 @@ def load_labelled_typology_data():
     else:
         return pd.DataFrame()
 
+    if "account" not in df_lab.columns or not annotation_accounts:
+        return pd.DataFrame()
+
+    # Keep only rows that have an account match in the annotation CSV
+    valid_accounts = {normalize_account(acc) for acc in annotation_accounts if normalize_account(acc)}
+    df_lab["account"] = df_lab["account"].fillna("").astype(str).str.strip()
+    df_lab["account_norm"] = df_lab["account"].apply(normalize_account)
+    df_lab = df_lab[df_lab["account_norm"].isin(valid_accounts)].copy()
+    df_lab = df_lab.drop_duplicates(subset=["account_norm"]).reset_index(drop=True)
+
+    if df_lab.empty:
+        return df_lab
+
     if "id" in df_lab.columns:
         df_lab["id"] = df_lab["id"].astype(str)
-    if "account" in df_lab.columns:
-        df_lab["account"] = df_lab["account"].astype(str).str.strip()
 
     # Standardize Qwen label column
     q_label_col = next(
@@ -263,13 +280,13 @@ def load_labelled_typology_data():
     # Fill in any missing profile metadata columns from typology_dataset.csv
     if os.path.exists(CSV_FILE):
         df_base = pd.read_csv(CSV_FILE, encoding="utf-8")
-        df_base["id"] = df_base["id"].astype(str)
-        df_base_unique = df_base.drop_duplicates(subset=["id"])
+        df_base["account_norm"] = df_base["account"].apply(normalize_account)
+        df_base_unique = df_base.drop_duplicates(subset=["account_norm"])
 
-        meta_cols = ["full_name", "biography", "is_verified", "followers", "url", "category"]
+        meta_cols = ["id", "full_name", "biography", "is_verified", "followers", "url", "category"]
         missing_cols = [c for c in meta_cols if c not in df_lab.columns and c in df_base_unique.columns]
-        if missing_cols and "id" in df_lab.columns:
-            df_lab = df_lab.merge(df_base_unique[["id"] + missing_cols], on="id", how="left")
+        if missing_cols:
+            df_lab = df_lab.merge(df_base_unique[["account_norm"] + missing_cols], on="account_norm", how="left")
 
     return df_lab
 
@@ -303,14 +320,14 @@ def render_launch_page():
 def render_explore_results_page():
     top_col1, top_col2, top_col3 = st.columns([5, 1.5, 1.5])
     with top_col1:
-        st.title("📊 Annotation Results Explorer")
+        st.title("Annotation Results Explorer")
     with top_col2:
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.session_state.pop("results_df", None)
             st.rerun()
     with top_col3:
-        if st.button("⬅️ Back to Launch Page", use_container_width=True):
+        if st.button("Back to Launch Page", use_container_width=True):
             st.session_state.page = "launch"
             st.rerun()
 
@@ -343,10 +360,15 @@ def render_explore_results_page():
 
     # --- 2. DROPDOWN: JUSTIFICATIONS ---
     with st.expander("Justifications", expanded=True):
-        df_lab = load_labelled_typology_data()
+        annotation_accounts = (
+            tuple(sorted(df_results["account"].dropna().unique().tolist()))
+            if not df_results.empty and "account" in df_results.columns
+            else ()
+        )
+        df_lab = load_labelled_typology_data(annotation_accounts)
 
         if df_lab.empty:
-            st.warning(f"Could not find `{LABELLED_CSV_FILE}`. Please ensure the file exists in `/data/`.")
+            st.info("No matching accounts found between `instagram_labelled_typology.csv` and the annotations CSV.")
             return
 
         # Build ideology options ordered by TYPOLOGY_COLORS
@@ -354,13 +376,12 @@ def render_explore_results_page():
         ordered_ideologies = [
             ideo for ideo in TYPOLOGY_COLORS.keys() if ideo in available_ideologies_lower
         ]
-        # Append any extra ideology labels if present
         for raw_ideo in sorted(df_lab["qwen_label_clean"].unique()):
             if raw_ideo and raw_ideo.lower() not in TYPOLOGY_COLORS:
                 ordered_ideologies.append(raw_ideo)
 
         if not ordered_ideologies:
-            st.info("No `qwen_label` ideologies found in the dataset.")
+            st.info("No `qwen_label` ideologies found for the matched accounts.")
             return
 
         # Color-coded ideology legend strip
@@ -396,25 +417,16 @@ def render_explore_results_page():
             df_lab["qwen_label_clean"].str.lower() == selected_ideology.lower()
         ].copy()
 
-        # Count how many student labels exist per profile in df_results
-        if not df_results.empty:
-            id_counts = df_results.groupby("id")["user"].count().to_dict() if "id" in df_results.columns else {}
-            acct_counts = (
-                df_results.groupby(df_results["account"].str.lower())["user"].count().to_dict()
-                if "account" in df_results.columns
-                else {}
-            )
+        # Count how many student labels exist per account in df_results
+        acct_counts = (
+            df_results.groupby(df_results["account"].apply(normalize_account))["user"].count().to_dict()
+            if not df_results.empty and "account" in df_results.columns
+            else {}
+        )
+        filtered_profiles["student_ann_count"] = filtered_profiles["account_norm"].map(
+            lambda acc: acct_counts.get(acc, 0)
+        )
 
-            def get_student_label_count(row):
-                r_id = str(row.get("id", ""))
-                r_acct = str(row.get("account", "")).lower()
-                return id_counts.get(r_id, acct_counts.get(r_acct, 0))
-
-            filtered_profiles["student_ann_count"] = filtered_profiles.apply(get_student_label_count, axis=1)
-        else:
-            filtered_profiles["student_ann_count"] = 0
-
-        # Prioritize profiles that have student annotations, then sort alphabetically by account
         filtered_profiles = filtered_profiles.sort_values(
             by=["student_ann_count", "account"], ascending=[False, True]
         ).reset_index(drop=True)
@@ -437,6 +449,7 @@ def render_explore_results_page():
         prof_row = filtered_profiles.iloc[selected_prof_idx]
         prof_id = str(prof_row.get("id", ""))
         prof_account = str(prof_row.get("account", ""))
+        prof_account_norm = prof_row["account_norm"]
 
         # --- TWO-COLUMN PROFILE & LABELS VIEW ---
         col_left, col_right = st.columns([1, 1], gap="medium")
@@ -444,7 +457,7 @@ def render_explore_results_page():
         # LEFT PANEL: Exact profile info layout from annotation page
         with col_left:
             st.markdown(f"### Account: [:blue[@{prof_account}]]({prof_row.get('url', '#')})")
-            with st.container(height=450, key=f"just_left_{prof_id}_{prof_account}"):
+            with st.container(height=450, key=f"just_left_{prof_id}_{prof_account_norm}"):
                 m1, m2, m3 = st.columns(3)
                 followers_val = prof_row.get("followers")
                 m1.metric("Followers", f"{int(followers_val):,}" if pd.notna(followers_val) else "N/A")
@@ -478,17 +491,14 @@ def render_explore_results_page():
         # RIGHT PANEL: Student labels + Qwen label, certainty & justification
         with col_right:
             st.subheader("Annotations & Qwen Justification")
-            with st.container(height=450, key=f"just_right_{prof_id}_{prof_account}"):
+            with st.container(height=450, key=f"just_right_{prof_id}_{prof_account_norm}"):
                 # 1. Student Labels
                 st.markdown("**Student Labels:**")
                 matched_students = pd.DataFrame()
-                if not df_results.empty:
-                    if prof_id and "id" in df_results.columns:
-                        matched_students = df_results[df_results["id"] == prof_id]
-                    if matched_students.empty and prof_account and "account" in df_results.columns:
-                        matched_students = df_results[
-                            df_results["account"].str.lower() == prof_account.lower()
-                        ]
+                if not df_results.empty and "account" in df_results.columns:
+                    matched_students = df_results[
+                        df_results["account"].apply(normalize_account) == prof_account_norm
+                    ]
 
                 if not matched_students.empty:
                     for _, s_row in matched_students.iterrows():
