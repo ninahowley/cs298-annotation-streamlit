@@ -70,11 +70,14 @@ def normalize_label(val):
     return s
 
 
-def normalize_account(val):
-    """Normalizes Instagram account handles for reliable cross-file matching."""
+def normalize_id(val):
+    """Normalizes profile IDs consistently across CSVs (handles whitespace and float '.0' suffixes)."""
     if pd.isna(val) or val is None:
         return ""
-    return str(val).strip().lstrip("@").lower()
+    s = str(val).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
 
 
 def render_label_badge(label_text):
@@ -125,8 +128,8 @@ def fetch_all_annotations():
         df_sheet = conn.read(ttl=60)
         if df_sheet is None or df_sheet.empty:
             return pd.DataFrame(columns=SHEET_COLUMNS)
-        df_sheet["id"] = df_sheet["id"].astype(str)
-        df_sheet["user"] = df_sheet["user"].astype(str)
+        df_sheet["id"] = df_sheet["id"].apply(normalize_id)
+        df_sheet["user"] = df_sheet["user"].astype(str).str.strip()
         return df_sheet
     except Exception:
         return pd.DataFrame(columns=SHEET_COLUMNS)
@@ -165,7 +168,8 @@ def save_user_annotations(user_id, annotations_dict, user_df):
 
     for item_id, typology_val in annotations_dict.items():
         if typology_val:
-            sub_df = user_df[user_df["id"].astype(str) == str(item_id)]
+            norm_item_id = normalize_id(item_id)
+            sub_df = user_df[user_df["id"].apply(normalize_id) == norm_item_id]
 
             acct_name = sub_df["account"].values[0] if not sub_df.empty and "account" in sub_df.columns else ""
             qwen_typ = sub_df[typ_col].values[0] if not sub_df.empty and typ_col else ""
@@ -173,7 +177,7 @@ def save_user_annotations(user_id, annotations_dict, user_df):
 
             new_rows.append(
                 {
-                    "id": str(item_id),
+                    "id": norm_item_id,
                     "account": str(acct_name),
                     "user": str(user_id),
                     "user_label": normalize_label(typology_val),
@@ -209,7 +213,7 @@ def delete_user_annotations(user_id):
 def load_data():
     df = pd.read_csv(CSV_FILE, encoding="utf-8")
 
-    df["id"] = df["id"].astype(str)
+    df["id"] = df["id"].apply(normalize_id)
     df["user"] = df["user"].astype(str).str.strip()
 
     def parse_posts(val):
@@ -225,8 +229,8 @@ def load_data():
 
 
 @st.cache_data
-def load_labelled_typology_data(annotation_accounts):
-    """Loads /data/instagram_labelled_typology.csv and keeps only rows whose account matches the annotation CSV."""
+def load_labelled_typology_data(annotation_ids):
+    """Loads /data/instagram_labelled_typology.csv and keeps only rows whose id matches the annotation CSV."""
     if os.path.exists(LABELLED_CSV_FILE):
         df_lab = pd.read_csv(LABELLED_CSV_FILE, encoding="utf-8")
     elif os.path.exists("instagram_labelled_typology.csv"):
@@ -234,21 +238,17 @@ def load_labelled_typology_data(annotation_accounts):
     else:
         return pd.DataFrame()
 
-    if "account" not in df_lab.columns or not annotation_accounts:
+    if "id" not in df_lab.columns or not annotation_ids:
         return pd.DataFrame()
 
-    # Keep only rows that have an account match in the annotation CSV
-    valid_accounts = {normalize_account(acc) for acc in annotation_accounts if normalize_account(acc)}
-    df_lab["account"] = df_lab["account"].fillna("").astype(str).str.strip()
-    df_lab["account_norm"] = df_lab["account"].apply(normalize_account)
-    df_lab = df_lab[df_lab["account_norm"].isin(valid_accounts)].copy()
-    df_lab = df_lab.drop_duplicates(subset=["account_norm"]).reset_index(drop=True)
+    # Keep only rows that have an id match in the annotation CSV
+    valid_ids = {normalize_id(i) for i in annotation_ids if normalize_id(i)}
+    df_lab["id"] = df_lab["id"].apply(normalize_id)
+    df_lab = df_lab[df_lab["id"].isin(valid_ids)].copy()
+    df_lab = df_lab.drop_duplicates(subset=["id"]).reset_index(drop=True)
 
     if df_lab.empty:
         return df_lab
-
-    if "id" in df_lab.columns:
-        df_lab["id"] = df_lab["id"].astype(str)
 
     # Standardize Qwen label column
     q_label_col = next(
@@ -277,16 +277,16 @@ def load_labelled_typology_data(annotation_accounts):
         df_lab[q_cert_col].fillna("N/A").astype(str) if q_cert_col else "N/A"
     )
 
-    # Fill in any missing profile metadata columns from typology_dataset.csv
+    # Fill in account and profile metadata columns from typology_dataset.csv by id
     if os.path.exists(CSV_FILE):
         df_base = pd.read_csv(CSV_FILE, encoding="utf-8")
-        df_base["account_norm"] = df_base["account"].apply(normalize_account)
-        df_base_unique = df_base.drop_duplicates(subset=["account_norm"])
+        df_base["id"] = df_base["id"].apply(normalize_id)
+        df_base_unique = df_base.drop_duplicates(subset=["id"])
 
-        meta_cols = ["id", "full_name", "biography", "is_verified", "followers", "url", "category"]
+        meta_cols = ["account", "full_name", "biography", "is_verified", "followers", "url", "category"]
         missing_cols = [c for c in meta_cols if c not in df_lab.columns and c in df_base_unique.columns]
         if missing_cols:
-            df_lab = df_lab.merge(df_base_unique[["account_norm"] + missing_cols], on="account_norm", how="left")
+            df_lab = df_lab.merge(df_base_unique[["id"] + missing_cols], on="id", how="left")
 
     return df_lab
 
@@ -320,14 +320,14 @@ def render_launch_page():
 def render_explore_results_page():
     top_col1, top_col2, top_col3 = st.columns([5, 1.5, 1.5])
     with top_col1:
-        st.title("Annotation Results Explorer")
+        st.title("📊 Annotation Results Explorer")
     with top_col2:
-        if st.button("Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.session_state.pop("results_df", None)
             st.rerun()
     with top_col3:
-        if st.button("Back to Launch Page", use_container_width=True):
+        if st.button("⬅️ Back to Launch Page", use_container_width=True):
             st.session_state.page = "launch"
             st.rerun()
 
@@ -338,6 +338,7 @@ def render_explore_results_page():
             for col in ["id", "account", "user", "user_label", "qwen_label", "qwen_certainty"]:
                 if col in df_live.columns:
                     df_live[col] = df_live[col].fillna("").astype(str).str.strip()
+            df_live["id"] = df_live["id"].apply(normalize_id)
             if "user_label" in df_live.columns:
                 df_live["user_label"] = df_live["user_label"].apply(normalize_label)
             if "qwen_label" in df_live.columns:
@@ -360,16 +361,31 @@ def render_explore_results_page():
 
     # --- 2. DROPDOWN: JUSTIFICATIONS ---
     with st.expander("Justifications", expanded=True):
-        annotation_accounts = (
-            tuple(sorted(df_results["account"].dropna().unique().tolist()))
-            if not df_results.empty and "account" in df_results.columns
+        annotation_ids = (
+            tuple(sorted(df_results["id"].dropna().unique().tolist()))
+            if not df_results.empty and "id" in df_results.columns
             else ()
         )
-        df_lab = load_labelled_typology_data(annotation_accounts)
+        df_lab = load_labelled_typology_data(annotation_ids)
 
         if df_lab.empty:
-            st.info("No matching accounts found between `instagram_labelled_typology.csv` and the annotations CSV.")
+            st.info("No matching IDs found between `instagram_labelled_typology.csv` and the annotations CSV.")
             return
+
+        # Populate fallback account names from df_results if missing from typology_dataset.csv
+        if not df_results.empty and {"id", "account"}.issubset(df_results.columns):
+            id_to_acct = (
+                df_results[df_results["account"] != ""]
+                .drop_duplicates(subset=["id"])
+                .set_index("id")["account"]
+                .to_dict()
+            )
+            if "account" not in df_lab.columns:
+                df_lab["account"] = df_lab["id"].map(id_to_acct).fillna("")
+            else:
+                df_lab["account"] = df_lab["account"].fillna("")
+                missing_acct_mask = df_lab["account"].astype(str).str.strip() == ""
+                df_lab.loc[missing_acct_mask, "account"] = df_lab.loc[missing_acct_mask, "id"].map(id_to_acct).fillna("")
 
         # Build ideology options ordered by TYPOLOGY_COLORS
         available_ideologies_lower = set(df_lab["qwen_label_clean"].str.lower().unique())
@@ -381,7 +397,7 @@ def render_explore_results_page():
                 ordered_ideologies.append(raw_ideo)
 
         if not ordered_ideologies:
-            st.info("No `qwen_label` ideologies found for the matched accounts.")
+            st.info("No `qwen_label` ideologies found for the matched IDs.")
             return
 
         # Color-coded ideology legend strip
@@ -417,30 +433,34 @@ def render_explore_results_page():
             df_lab["qwen_label_clean"].str.lower() == selected_ideology.lower()
         ].copy()
 
-        # Count how many student labels exist per account in df_results
-        acct_counts = (
-            df_results.groupby(df_results["account"].apply(normalize_account))["user"].count().to_dict()
-            if not df_results.empty and "account" in df_results.columns
+        # Count how many student labels exist per ID in df_results
+        id_counts = (
+            df_results.groupby("id")["user"].count().to_dict()
+            if not df_results.empty and "id" in df_results.columns
             else {}
         )
-        filtered_profiles["student_ann_count"] = filtered_profiles["account_norm"].map(
-            lambda acc: acct_counts.get(acc, 0)
+        filtered_profiles["student_ann_count"] = filtered_profiles["id"].map(
+            lambda pid: id_counts.get(pid, 0)
         )
 
         filtered_profiles = filtered_profiles.sort_values(
-            by=["student_ann_count", "account"], ascending=[False, True]
+            by=["student_ann_count", "account", "id"], ascending=[False, True, True]
         ).reset_index(drop=True)
 
         with filter_col2:
             profile_indices = list(range(len(filtered_profiles)))
+
+            def format_profile_option(idx_val):
+                r = filtered_profiles.iloc[idx_val]
+                acct_str = str(r.get("account", "")).strip()
+                display_name = f"@{acct_str}" if acct_str else f"ID: {r['id']}"
+                cnt = r["student_ann_count"]
+                return f"{display_name} ({cnt} student label{'' if cnt == 1 else 's'})"
+
             selected_prof_idx = st.selectbox(
                 "Select Profile Account:",
                 options=profile_indices,
-                format_func=lambda idx_val: (
-                    f"@{filtered_profiles.iloc[idx_val]['account']} "
-                    f"({filtered_profiles.iloc[idx_val]['student_ann_count']} student label"
-                    f"{'' if filtered_profiles.iloc[idx_val]['student_ann_count'] == 1 else 's'})"
-                ),
+                format_func=format_profile_option,
                 key=f"justifications_profile_filter_{selected_ideology}",
             )
 
@@ -448,16 +468,16 @@ def render_explore_results_page():
 
         prof_row = filtered_profiles.iloc[selected_prof_idx]
         prof_id = str(prof_row.get("id", ""))
-        prof_account = str(prof_row.get("account", ""))
-        prof_account_norm = prof_row["account_norm"]
+        prof_account = str(prof_row.get("account", "")).strip()
+        header_label = f"@{prof_account}" if prof_account else f"ID: {prof_id}"
 
         # --- TWO-COLUMN PROFILE & LABELS VIEW ---
         col_left, col_right = st.columns([1, 1], gap="medium")
 
         # LEFT PANEL: Exact profile info layout from annotation page
         with col_left:
-            st.markdown(f"### Account: [:blue[@{prof_account}]]({prof_row.get('url', '#')})")
-            with st.container(height=450, key=f"just_left_{prof_id}_{prof_account_norm}"):
+            st.markdown(f"### Account: [:blue[{header_label}]]({prof_row.get('url', '#')})")
+            with st.container(height=450, key=f"just_left_{prof_id}"):
                 m1, m2, m3 = st.columns(3)
                 followers_val = prof_row.get("followers")
                 m1.metric("Followers", f"{int(followers_val):,}" if pd.notna(followers_val) else "N/A")
@@ -491,14 +511,14 @@ def render_explore_results_page():
         # RIGHT PANEL: Student labels + Qwen label, certainty & justification
         with col_right:
             st.subheader("Annotations & Qwen Justification")
-            with st.container(height=450, key=f"just_right_{prof_id}_{prof_account_norm}"):
-                # 1. Student Labels
+            with st.container(height=450, key=f"just_right_{prof_id}"):
+                # 1. Student Labels (matched by id)
                 st.markdown("**Student Labels:**")
-                matched_students = pd.DataFrame()
-                if not df_results.empty and "account" in df_results.columns:
-                    matched_students = df_results[
-                        df_results["account"].apply(normalize_account) == prof_account_norm
-                    ]
+                matched_students = (
+                    df_results[df_results["id"] == prof_id]
+                    if not df_results.empty and "id" in df_results.columns
+                    else pd.DataFrame()
+                )
 
                 if not matched_students.empty:
                     for _, s_row in matched_students.iterrows():
