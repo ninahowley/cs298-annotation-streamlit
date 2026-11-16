@@ -6,7 +6,8 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION ---
-CSV_FILE = "typology_dataset.csv"
+ANNOTATOR_CSV_FILE = "typology_dataset.csv"
+BASE_DATA_CSV_FILE = os.path.join("data", "typology_dataset.csv")
 LABELLED_CSV_FILE = os.path.join("data", "instagram_labelled_typology.csv")
 RESULTS_SNAPSHOT_FILE = "current_annotations.csv"
 KEY_FILE = os.path.join("secrets", "app_key.txt")
@@ -71,13 +72,29 @@ def normalize_label(val):
 
 
 def normalize_id(val):
-    """Normalizes profile IDs consistently across CSVs (handles whitespace and float '.0' suffixes)."""
+    """Normalizes profile IDs consistently across CSVs (strips '.0' and float formatting)."""
     if pd.isna(val) or val is None:
         return ""
     s = str(val).strip()
+    if not s or s.lower() == "nan":
+        return ""
+    try:
+        f = float(s)
+        if f.is_integer():
+            return str(int(f))
+    except (ValueError, OverflowError):
+        pass
     if s.endswith(".0"):
         s = s[:-2]
     return s
+
+
+def normalize_account(val):
+    """Normalizes Instagram usernames for reliable cross-file matching."""
+    if pd.isna(val) or val is None:
+        return ""
+    s = str(val).strip().lstrip("@").lower()
+    return "" if s == "nan" else s
 
 
 def render_label_badge(label_text):
@@ -211,7 +228,8 @@ def delete_user_annotations(user_id):
 # --- DATA LOADING ---
 @st.cache_data
 def load_data():
-    df = pd.read_csv(CSV_FILE, encoding="utf-8")
+    csv_path = ANNOTATOR_CSV_FILE if os.path.exists(ANNOTATOR_CSV_FILE) else BASE_DATA_CSV_FILE
+    df = pd.read_csv(csv_path, encoding="utf-8", dtype={"id": str})
 
     df["id"] = df["id"].apply(normalize_id)
     df["user"] = df["user"].astype(str).str.strip()
@@ -229,23 +247,68 @@ def load_data():
 
 
 @st.cache_data
-def load_labelled_typology_data(annotation_ids):
-    """Loads /data/instagram_labelled_typology.csv and keeps only rows whose id matches the annotation CSV."""
-    if os.path.exists(LABELLED_CSV_FILE):
-        df_lab = pd.read_csv(LABELLED_CSV_FILE, encoding="utf-8")
-    elif os.path.exists("instagram_labelled_typology.csv"):
-        df_lab = pd.read_csv("instagram_labelled_typology.csv", encoding="utf-8")
+def load_labelled_typology_data(annotation_usernames):
+    """
+    1. Reads data/instagram_labelled_typology.csv and joins profile info from data/typology_dataset.csv via `id`.
+    2. Filters rows to only those whose username (`account`) matches a username in the annotations dataset.
+    """
+    if not annotation_usernames:
+        return pd.DataFrame()
+
+    # Load base metadata CSV (data/typology_dataset.csv)
+    base_path = BASE_DATA_CSV_FILE if os.path.exists(BASE_DATA_CSV_FILE) else ANNOTATOR_CSV_FILE
+    df_base = pd.DataFrame()
+    if os.path.exists(base_path):
+        df_base = pd.read_csv(base_path, encoding="utf-8", dtype={"id": str})
+        df_base["id"] = df_base["id"].apply(normalize_id)
+        df_base = df_base[df_base["id"] != ""].drop_duplicates(subset=["id"]).reset_index(drop=True)
+
+    # Load labelled typology CSV (data/instagram_labelled_typology.csv)
+    lab_path = LABELLED_CSV_FILE if os.path.exists(LABELLED_CSV_FILE) else "instagram_labelled_typology.csv"
+    if os.path.exists(lab_path):
+        df_lab = pd.read_csv(lab_path, encoding="utf-8", dtype={"id": str})
+        if "id" in df_lab.columns:
+            df_lab["id"] = df_lab["id"].apply(normalize_id)
+            df_lab = df_lab[df_lab["id"] != ""].drop_duplicates(subset=["id"]).reset_index(drop=True)
     else:
+        df_lab = df_base.copy()
+
+    if df_lab.empty:
         return pd.DataFrame()
 
-    if "id" not in df_lab.columns or not annotation_ids:
+    # Merge full profile info from data/typology_dataset.csv by `id`
+    if not df_base.empty and "id" in df_lab.columns:
+        meta_cols = [
+            "account",
+            "full_name",
+            "biography",
+            "is_verified",
+            "followers",
+            "url",
+            "category",
+            "political",
+            "typology",
+            "typology_justification",
+            "typology_certainty",
+            "account_summary",
+            "info",
+        ]
+        available_meta = [c for c in meta_cols if c in df_base.columns]
+        # Drop overlapping metadata columns from df_lab before merging so data/typology_dataset.csv values are authoritative
+        cols_to_drop = [c for c in available_meta if c in df_lab.columns and not c.startswith("qwen_")]
+        df_lab = df_lab.drop(columns=cols_to_drop).merge(
+            df_base[["id"] + available_meta], on="id", how="left"
+        )
+
+    if "account" not in df_lab.columns:
         return pd.DataFrame()
 
-    # Keep only rows that have an id match in the annotation CSV
-    valid_ids = {normalize_id(i) for i in annotation_ids if normalize_id(i)}
-    df_lab["id"] = df_lab["id"].apply(normalize_id)
-    df_lab = df_lab[df_lab["id"].isin(valid_ids)].copy()
-    df_lab = df_lab.drop_duplicates(subset=["id"]).reset_index(drop=True)
+    # Filter using username (`account`) against the annotations dataset
+    valid_usernames = {normalize_account(u) for u in annotation_usernames if normalize_account(u)}
+    df_lab["account"] = df_lab["account"].fillna("").astype(str).str.strip()
+    df_lab["account_norm"] = df_lab["account"].apply(normalize_account)
+    df_lab = df_lab[df_lab["account_norm"].isin(valid_usernames)].copy()
+    df_lab = df_lab.drop_duplicates(subset=["account_norm"]).reset_index(drop=True)
 
     if df_lab.empty:
         return df_lab
@@ -276,17 +339,6 @@ def load_labelled_typology_data(annotation_ids):
     df_lab["qwen_certainty_clean"] = (
         df_lab[q_cert_col].fillna("N/A").astype(str) if q_cert_col else "N/A"
     )
-
-    # Fill in account and profile metadata columns from typology_dataset.csv by id
-    if os.path.exists(CSV_FILE):
-        df_base = pd.read_csv(CSV_FILE, encoding="utf-8")
-        df_base["id"] = df_base["id"].apply(normalize_id)
-        df_base_unique = df_base.drop_duplicates(subset=["id"])
-
-        meta_cols = ["account", "full_name", "biography", "is_verified", "followers", "url", "category"]
-        missing_cols = [c for c in meta_cols if c not in df_lab.columns and c in df_base_unique.columns]
-        if missing_cols:
-            df_lab = df_lab.merge(df_base_unique[["id"] + missing_cols], on="id", how="left")
 
     return df_lab
 
@@ -361,31 +413,20 @@ def render_explore_results_page():
 
     # --- 2. DROPDOWN: JUSTIFICATIONS ---
     with st.expander("Justifications", expanded=True):
-        annotation_ids = (
-            tuple(sorted(df_results["id"].dropna().unique().tolist()))
-            if not df_results.empty and "id" in df_results.columns
+        annotation_usernames = (
+            tuple(sorted(df_results["account"].dropna().unique().tolist()))
+            if not df_results.empty and "account" in df_results.columns
             else ()
         )
-        df_lab = load_labelled_typology_data(annotation_ids)
+        df_lab = load_labelled_typology_data(annotation_usernames)
 
         if df_lab.empty:
-            st.info("No matching IDs found between `instagram_labelled_typology.csv` and the annotations CSV.")
+            st.info("No matching usernames found between `data/instagram_labelled_typology.csv` and the annotations CSV.")
             return
 
-        # Populate fallback account names from df_results if missing from typology_dataset.csv
-        if not df_results.empty and {"id", "account"}.issubset(df_results.columns):
-            id_to_acct = (
-                df_results[df_results["account"] != ""]
-                .drop_duplicates(subset=["id"])
-                .set_index("id")["account"]
-                .to_dict()
-            )
-            if "account" not in df_lab.columns:
-                df_lab["account"] = df_lab["id"].map(id_to_acct).fillna("")
-            else:
-                df_lab["account"] = df_lab["account"].fillna("")
-                missing_acct_mask = df_lab["account"].astype(str).str.strip() == ""
-                df_lab.loc[missing_acct_mask, "account"] = df_lab.loc[missing_acct_mask, "id"].map(id_to_acct).fillna("")
+        # Add normalized username column to df_results for matching student labels
+        df_results_work = df_results.copy()
+        df_results_work["account_norm"] = df_results_work["account"].apply(normalize_account)
 
         # Build ideology options ordered by TYPOLOGY_COLORS
         available_ideologies_lower = set(df_lab["qwen_label_clean"].str.lower().unique())
@@ -397,7 +438,7 @@ def render_explore_results_page():
                 ordered_ideologies.append(raw_ideo)
 
         if not ordered_ideologies:
-            st.info("No `qwen_label` ideologies found for the matched IDs.")
+            st.info("No `qwen_label` ideologies found for the matched usernames.")
             return
 
         # Color-coded ideology legend strip
@@ -433,18 +474,14 @@ def render_explore_results_page():
             df_lab["qwen_label_clean"].str.lower() == selected_ideology.lower()
         ].copy()
 
-        # Count how many student labels exist per ID in df_results
-        id_counts = (
-            df_results.groupby("id")["user"].count().to_dict()
-            if not df_results.empty and "id" in df_results.columns
-            else {}
-        )
-        filtered_profiles["student_ann_count"] = filtered_profiles["id"].map(
-            lambda pid: id_counts.get(pid, 0)
+        # Count student labels per username (`account_norm`)
+        acct_counts = df_results_work.groupby("account_norm")["user"].count().to_dict()
+        filtered_profiles["student_ann_count"] = filtered_profiles["account_norm"].map(
+            lambda acc: acct_counts.get(acc, 0)
         )
 
         filtered_profiles = filtered_profiles.sort_values(
-            by=["student_ann_count", "account", "id"], ascending=[False, True, True]
+            by=["student_ann_count", "account"], ascending=[False, True]
         ).reset_index(drop=True)
 
         with filter_col2:
@@ -453,9 +490,8 @@ def render_explore_results_page():
             def format_profile_option(idx_val):
                 r = filtered_profiles.iloc[idx_val]
                 acct_str = str(r.get("account", "")).strip()
-                display_name = f"@{acct_str}" if acct_str else f"ID: {r['id']}"
                 cnt = r["student_ann_count"]
-                return f"{display_name} ({cnt} student label{'' if cnt == 1 else 's'})"
+                return f"@{acct_str} ({cnt} student label{'' if cnt == 1 else 's'})"
 
             selected_prof_idx = st.selectbox(
                 "Select Profile Account:",
@@ -469,27 +505,29 @@ def render_explore_results_page():
         prof_row = filtered_profiles.iloc[selected_prof_idx]
         prof_id = str(prof_row.get("id", ""))
         prof_account = str(prof_row.get("account", "")).strip()
-        header_label = f"@{prof_account}" if prof_account else f"ID: {prof_id}"
+        prof_account_norm = prof_row["account_norm"]
+        prof_url = prof_row.get("url") if pd.notna(prof_row.get("url")) and str(prof_row.get("url")).strip() else f"https://www.instagram.com/{prof_account}/"
 
         # --- TWO-COLUMN PROFILE & LABELS VIEW ---
         col_left, col_right = st.columns([1, 1], gap="medium")
 
-        # LEFT PANEL: Exact profile info layout from annotation page
+        # LEFT PANEL: Profile metadata from data/typology_dataset.csv
         with col_left:
-            st.markdown(f"### Account: [:blue[{header_label}]]({prof_row.get('url', '#')})")
-            with st.container(height=450, key=f"just_left_{prof_id}"):
+            st.markdown(f"### Account: [:blue[@{prof_account}]]({prof_url})")
+            with st.container(height=450, key=f"just_left_{prof_id}_{prof_account_norm}"):
                 m1, m2, m3 = st.columns(3)
-                followers_val = prof_row.get("followers")
+                followers_val = pd.to_numeric(prof_row.get("followers"), errors="coerce")
                 m1.metric("Followers", f"{int(followers_val):,}" if pd.notna(followers_val) else "N/A")
-                m2.metric("Verified", "Yes" if prof_row.get("is_verified") else "No")
-                m3.metric("Category", str(prof_row.get("category", prof_row.get("account_category", "N/A"))))
+                m2.metric("Verified", "Yes" if prof_row.get("is_verified") is True or str(prof_row.get("is_verified")).lower() == "true" else "No")
+                m3.metric("Category", str(prof_row.get("category", "N/A")) if pd.notna(prof_row.get("category")) else "N/A")
 
-                st.markdown(f"**Full Name:** {prof_row.get('full_name', 'N/A')}")
+                full_name_val = prof_row.get("full_name") if pd.notna(prof_row.get("full_name")) and str(prof_row.get("full_name")).strip() else "N/A"
+                st.markdown(f"**Full Name:** {full_name_val}")
                 st.markdown("**Biography:**")
 
                 bio_text = (
                     prof_row["biography"]
-                    if "biography" in prof_row and pd.notna(prof_row["biography"])
+                    if "biography" in prof_row and pd.notna(prof_row["biography"]) and str(prof_row["biography"]).strip()
                     else "No biography available."
                 )
                 st.markdown(
@@ -508,17 +546,19 @@ def render_explore_results_page():
                     unsafe_allow_html=True,
                 )
 
-        # RIGHT PANEL: Student labels + Qwen label, certainty & justification
+                # Show account_summary or info if present in data/typology_dataset.csv
+                for extra_col, extra_label in [("account_summary", "Account Summary"), ("info", "Additional Info")]:
+                    if extra_col in prof_row and pd.notna(prof_row[extra_col]) and str(prof_row[extra_col]).strip():
+                        st.markdown(f"**{extra_label}:**")
+                        st.write(str(prof_row[extra_col]))
+
+        # RIGHT PANEL: Student labels (matched by username) + Qwen label, certainty & justification
         with col_right:
             st.subheader("Annotations & Qwen Justification")
-            with st.container(height=450, key=f"just_right_{prof_id}"):
-                # 1. Student Labels (matched by id)
+            with st.container(height=450, key=f"just_right_{prof_id}_{prof_account_norm}"):
+                # 1. Student Labels matched by username (`account_norm`)
                 st.markdown("**Student Labels:**")
-                matched_students = (
-                    df_results[df_results["id"] == prof_id]
-                    if not df_results.empty and "id" in df_results.columns
-                    else pd.DataFrame()
-                )
+                matched_students = df_results_work[df_results_work["account_norm"] == prof_account_norm]
 
                 if not matched_students.empty:
                     for _, s_row in matched_students.iterrows():
