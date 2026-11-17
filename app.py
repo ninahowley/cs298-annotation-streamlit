@@ -369,14 +369,14 @@ def render_launch_page():
 def render_explore_results_page():
     top_col1, top_col2, top_col3 = st.columns([5, 1.5, 1.5])
     with top_col1:
-        st.title("📊 Annotation Results Explorer")
+        st.title("Annotation Results Explorer")
     with top_col2:
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.session_state.pop("results_df", None)
             st.rerun()
     with top_col3:
-        if st.button("⬅️ Back to Launch Page", use_container_width=True):
+        if st.button("Back to Launch Page", use_container_width=True):
             st.session_state.page = "launch"
             st.rerun()
 
