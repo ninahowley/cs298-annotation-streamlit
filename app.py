@@ -6,7 +6,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURATION ---
-ANNOTATOR_CSV_FILE = "typology_dataset.csv"
+CSV_FILE = "data/annotation_dataset.csv"
 BASE_DATA_CSV_FILE = os.path.join("data", "typology_dataset.csv")
 LABELLED_CSV_FILE = os.path.join("data", "instagram_labelled_typology.csv")
 RESULTS_SNAPSHOT_FILE = "current_annotations.csv"
@@ -21,7 +21,6 @@ TYPOLOGY_OPTIONS = [
     "left-out left",
     "faith first conservative",
     "unconventional right",
-    "not applicable",
 ]
 
 TYPOLOGY_COLORS = {
@@ -157,7 +156,7 @@ def load_existing_user_annotations(user_id):
     df_sheet = fetch_all_annotations()
     if df_sheet.empty or "user_label" not in df_sheet.columns:
         return {}
-    user_rows = df_sheet[df_sheet["user"] == str(user_id)]
+    user_rows = df_sheet[df_sheet["user"] == str(user_id).strip()]
     return dict(zip(user_rows["id"], user_rows["user_label"].apply(normalize_label)))
 
 
@@ -167,7 +166,7 @@ def save_user_annotations(user_id, annotations_dict, user_df):
     df_sheet = fetch_all_annotations()
 
     if not df_sheet.empty:
-        df_sheet = df_sheet[df_sheet["user"] != str(user_id)]
+        df_sheet = df_sheet[df_sheet["user"].astype(str).str.strip() != str(user_id).strip()]
 
     new_rows = []
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -196,7 +195,7 @@ def save_user_annotations(user_id, annotations_dict, user_df):
                 {
                     "id": norm_item_id,
                     "account": str(acct_name),
-                    "user": str(user_id),
+                    "user": str(user_id).strip(),
                     "user_label": normalize_label(typology_val),
                     "qwen_label": normalize_label(qwen_typ),
                     "qwen_certainty": str(qwen_cert),
@@ -220,7 +219,7 @@ def delete_user_annotations(user_id):
     df_sheet = fetch_all_annotations()
 
     if not df_sheet.empty:
-        df_updated = df_sheet[df_sheet["user"] != str(user_id)]
+        df_updated = df_sheet[df_sheet["user"].astype(str).str.strip() != str(user_id).strip()]
         conn.update(data=df_updated)
         st.cache_data.clear()
 
@@ -228,8 +227,7 @@ def delete_user_annotations(user_id):
 # --- DATA LOADING ---
 @st.cache_data
 def load_data():
-    csv_path = ANNOTATOR_CSV_FILE if os.path.exists(ANNOTATOR_CSV_FILE) else BASE_DATA_CSV_FILE
-    df = pd.read_csv(csv_path, encoding="utf-8", dtype={"id": str})
+    df = pd.read_csv(CSV_FILE, encoding="utf-8", dtype={"id": str})
 
     df["id"] = df["id"].apply(normalize_id)
     df["user"] = df["user"].astype(str).str.strip()
@@ -256,7 +254,7 @@ def load_labelled_typology_data(annotation_usernames):
         return pd.DataFrame()
 
     # Load base metadata CSV (data/typology_dataset.csv)
-    base_path = BASE_DATA_CSV_FILE if os.path.exists(BASE_DATA_CSV_FILE) else ANNOTATOR_CSV_FILE
+    base_path = BASE_DATA_CSV_FILE if os.path.exists(BASE_DATA_CSV_FILE) else CSV_FILE
     df_base = pd.DataFrame()
     if os.path.exists(base_path):
         df_base = pd.read_csv(base_path, encoding="utf-8", dtype={"id": str})
@@ -294,7 +292,6 @@ def load_labelled_typology_data(annotation_usernames):
             "info",
         ]
         available_meta = [c for c in meta_cols if c in df_base.columns]
-        # Drop overlapping metadata columns from df_lab before merging so data/typology_dataset.csv values are authoritative
         cols_to_drop = [c for c in available_meta if c in df_lab.columns and not c.startswith("qwen_")]
         df_lab = df_lab.drop(columns=cols_to_drop).merge(
             df_base[["id"] + available_meta], on="id", how="left"
@@ -372,14 +369,14 @@ def render_launch_page():
 def render_explore_results_page():
     top_col1, top_col2, top_col3 = st.columns([5, 1.5, 1.5])
     with top_col1:
-        st.title("Annotation Results Explorer")
+        st.title("📊 Annotation Results Explorer")
     with top_col2:
-        if st.button("Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.session_state.pop("results_df", None)
             st.rerun()
     with top_col3:
-        if st.button("Back to Launch Page", use_container_width=True):
+        if st.button("⬅️ Back to Launch Page", use_container_width=True):
             st.session_state.page = "launch"
             st.rerun()
 
@@ -412,7 +409,7 @@ def render_explore_results_page():
     st.divider()
 
     # --- 2. DROPDOWN: JUSTIFICATIONS ---
-    with st.expander("Qwen Labels & Justifications", expanded=True):
+    with st.expander("Justifications", expanded=True):
         annotation_usernames = (
             tuple(sorted(df_results["account"].dropna().unique().tolist()))
             if not df_results.empty and "account" in df_results.columns
@@ -424,7 +421,6 @@ def render_explore_results_page():
             st.info("No matching usernames found between `data/instagram_labelled_typology.csv` and the annotations CSV.")
             return
 
-        # Add normalized username column to df_results for matching student labels
         df_results_work = df_results.copy()
         df_results_work["account_norm"] = df_results_work["account"].apply(normalize_account)
 
@@ -506,7 +502,11 @@ def render_explore_results_page():
         prof_id = str(prof_row.get("id", ""))
         prof_account = str(prof_row.get("account", "")).strip()
         prof_account_norm = prof_row["account_norm"]
-        prof_url = prof_row.get("url") if pd.notna(prof_row.get("url")) and str(prof_row.get("url")).strip() else f"https://www.instagram.com/{prof_account}/"
+        prof_url = (
+            prof_row.get("url")
+            if pd.notna(prof_row.get("url")) and str(prof_row.get("url")).strip()
+            else f"https://www.instagram.com/{prof_account}/"
+        )
 
         # --- TWO-COLUMN PROFILE & LABELS VIEW ---
         col_left, col_right = st.columns([1, 1], gap="medium")
@@ -518,10 +518,19 @@ def render_explore_results_page():
                 m1, m2, m3 = st.columns(3)
                 followers_val = pd.to_numeric(prof_row.get("followers"), errors="coerce")
                 m1.metric("Followers", f"{int(followers_val):,}" if pd.notna(followers_val) else "N/A")
-                m2.metric("Verified", "Yes" if prof_row.get("is_verified") is True or str(prof_row.get("is_verified")).lower() == "true" else "No")
+                m2.metric(
+                    "Verified",
+                    "Yes"
+                    if prof_row.get("is_verified") is True or str(prof_row.get("is_verified")).lower() == "true"
+                    else "No",
+                )
                 m3.metric("Category", str(prof_row.get("category", "N/A")) if pd.notna(prof_row.get("category")) else "N/A")
 
-                full_name_val = prof_row.get("full_name") if pd.notna(prof_row.get("full_name")) and str(prof_row.get("full_name")).strip() else "N/A"
+                full_name_val = (
+                    prof_row.get("full_name")
+                    if pd.notna(prof_row.get("full_name")) and str(prof_row.get("full_name")).strip()
+                    else "N/A"
+                )
                 st.markdown(f"**Full Name:** {full_name_val}")
                 st.markdown("**Biography:**")
 
@@ -541,13 +550,12 @@ def render_explore_results_page():
                         margin-top: 4px;
                     ">
                         {bio_text}
-                    </div><br>
+                    </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
-                # Show account_summary or info if present in data/typology_dataset.csv
-                for extra_col, extra_label in [("account_summary", "Qwen Account Summary"), ("info", "Additional Info")]:
+                for extra_col, extra_label in [("account_summary", "Account Summary"), ("info", "Additional Info")]:
                     if extra_col in prof_row and pd.notna(prof_row[extra_col]) and str(prof_row[extra_col]).strip():
                         st.markdown(f"**{extra_label}:**")
                         st.write(str(prof_row[extra_col]))
@@ -556,7 +564,6 @@ def render_explore_results_page():
         with col_right:
             st.subheader("Annotations & Qwen Justification")
             with st.container(height=450, key=f"just_right_{prof_id}_{prof_account_norm}"):
-                # 1. Student Labels matched by username (`account_norm`)
                 st.markdown("**Student Labels:**")
                 matched_students = df_results_work[df_results_work["account_norm"] == prof_account_norm]
 
@@ -574,7 +581,6 @@ def render_explore_results_page():
 
                 st.divider()
 
-                # 2. Qwen Label & Certainty
                 q_label = prof_row.get("qwen_label_clean", "")
                 q_cert = prof_row.get("qwen_certainty_clean", "N/A")
                 q_just = prof_row.get("qwen_justification_clean", "No justification provided.")
@@ -592,7 +598,6 @@ def render_explore_results_page():
 
                 st.write("")
 
-                # 3. Qwen Justification
                 st.markdown("**Qwen Justification:**")
                 border_hex = TYPOLOGY_COLORS.get(q_label.lower(), "#747474")
                 st.markdown(
