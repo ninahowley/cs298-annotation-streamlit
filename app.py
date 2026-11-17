@@ -621,6 +621,9 @@ def render_explore_results_page():
 
 # --- PAGE 3: STUDENT ANNOTATOR WORKSPACE ---
 def render_annotator_page():
+
+    st.set_page_config(page_title="Political Typology Annotator", layout="wide")
+
     df = load_data()
 
     # --- SIDEBAR: USER SELECTION & DEFINITIONS ---
@@ -634,11 +637,6 @@ def render_annotator_page():
 
     if selected_user == "-- Select User --":
         st.info("Please select your User ID in the sidebar to begin annotating.")
-        st.sidebar.divider()
-        if st.sidebar.button("🔒 Exit App", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.page = "launch"
-            st.rerun()
         return
 
     user_df = df[df["user"] == selected_user].reset_index(drop=True)
@@ -649,10 +647,10 @@ def render_annotator_page():
 
     # --- SIDEBAR: TYPOLOGY DEFINITIONS DROPDOWN ---
     st.sidebar.divider()
-    with st.sidebar.expander("📖 Typology Definitions"):
+    with st.sidebar.expander("Typology Definitions"):
         for title, desc in TYPOLOGY_DEFINITIONS.items():
             st.markdown(f"**{title.title()}**")
-            st.write(desc)
+            st.caption(desc)
             st.divider()
 
     # --- SESSION STATE INITIALIZATION ---
@@ -682,7 +680,6 @@ def render_annotator_page():
     st.sidebar.divider()
     if st.sidebar.button("🔒 Exit App", use_container_width=True):
         st.session_state.authenticated = False
-        st.session_state.page = "launch"
         st.rerun()
 
     idx = st.session_state.current_idx
@@ -706,14 +703,14 @@ def render_annotator_page():
         st.markdown(f"### Account: [:blue[@{current_row['account']}]]({current_row.get('url', '#')})")
         with st.container(height=450, key=f"left_container_{current_id}"):
             m1, m2, m3 = st.columns(3)
-            m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row["followers"]) else "N/A")
+            m1.metric("Followers", f"{current_row['followers']:,}" if pd.notna(current_row['followers']) else "N/A")
             m2.metric("Verified", "Yes" if current_row.get("is_verified") else "No")
-            m3.metric("Category", str(current_row.get("category", current_row.get("account_category", "N/A"))))
+            m3.metric("Category (labelled by AI)", str(current_row.get("category", current_row.get("account_category", "N/A"))))
 
             st.markdown(f"**Full Name:** {current_row['full_name']}")
             st.markdown("**Biography:**")
 
-            bio_text = current_row["biography"] if pd.notna(current_row["biography"]) else "No biography available."
+            bio_text = current_row['biography'] if pd.notna(current_row['biography']) else "No biography available."
             st.markdown(
                 f"""
                 <div style="
@@ -740,6 +737,8 @@ def render_annotator_page():
                 for i, post in enumerate(posts_list, 1):
                     caption = post.get("caption", "No caption provided.")
                     content_type = post.get("content_type", "Video")
+                    
+                    # Safely extract and slice date regardless of missing/null data types
                     raw_dt = post.get("datetime")
                     dt = str(raw_dt)[:10] if pd.notna(raw_dt) and raw_dt else ""
 
